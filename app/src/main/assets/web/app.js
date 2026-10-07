@@ -21,6 +21,9 @@
   }
   const field = (label, value, mono) =>
     h("div", { class: "field" }, h("span", { text: label }), h("span", { class: mono ? "mono" : "", text: value ?? "—" }));
+  /** Like replaceChildren, but skips null and false the way h() does. */
+  const fill = (el, ...children) =>
+    el.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
   const mb = (bytes) => (bytes / 1e6).toFixed(1) + " MB";
 
   let state = null;
@@ -85,7 +88,7 @@
 
   function buildTabs() {
     const nav = $("tabs");
-    nav.replaceChildren(...tabs.map((name) =>
+    fill(nav, ...tabs.map((name) =>
       h("button", { "data-tab": name, text: name, onclick: () => select(name) })));
     for (const name of tabs) {
       const section = h("section", { class: "view", id: "view-" + name });
@@ -156,13 +159,13 @@
   function renderDevice() {
     const s = state;
     const connected = s.connection !== "DISCONNECTED" && s.connection !== "ERROR";
-    dyn.status.replaceChildren(
+    fill(dyn.status, 
       h("div", { class: "row spread" }, h("h2", { text: "Connection" }),
         connected ? h("button", { class: "danger", text: "Disconnect", onclick: () => act("/api/disconnect") }) : null),
       field("State", CONNECTION[s.connection] || s.connection),
       s.transport ? field("Link", s.transport) : null,
       s.pairingHint ? h("div", { class: "hint", text: s.pairingHint }) : null);
-    dyn.found.replaceChildren(...(s.discovered.length ? s.discovered.map((d) =>
+    fill(dyn.found, ...(s.discovered.length ? s.discovered.map((d) =>
       h("div", { class: "item" },
         h("div", {}, h("span", { class: "title", text: d.name }),
           h("span", { class: "tag", text: d.kind === "usb" ? "Wired (USB)" : "Wireless" }),
@@ -172,7 +175,7 @@
     dyn.info.hidden = !s.device;
     if (s.device) {
       const d = s.device;
-      dyn.info.replaceChildren(h("h2", { text: d.name }),
+      fill(dyn.info, h("h2", { text: d.name }),
         field("Model", d.productType), field("iOS", d.productVersion + " (" + d.buildVersion + ")"),
         field("UDID", d.udid, true), field("Architecture", d.cpuArchitecture),
         d.wifiAddress ? field("Wi-Fi MAC", d.wifiAddress, true) : null);
@@ -250,20 +253,20 @@
     if (s.connection !== "READY") needs.push("Connect and pair the iPhone on the Device tab.");
     if (!s.account) needs.push("Sign in with your Apple ID on the Account tab; the signature comes from a real certificate Apple issues to it.");
     dyn.before.hidden = needs.length === 0;
-    dyn.before.replaceChildren(h("h2", { text: "Before installing" }), ...needs.map((t) => h("p", { class: "muted", text: t })));
+    fill(dyn.before, h("h2", { text: "Before installing" }), ...needs.map((t) => h("p", { class: "muted", text: t })));
     if (!dyn.sources.childElementCount) {
       dyn.sources.append(...s.sources.map((src, i) =>
         actionButton("Install " + src.title, () => act("/api/install-source", { source: src.id }), i === 0 ? "primary" : "", "ready")));
     }
     const ipa = s.selectedIpa;
-    dyn.ipa.replaceChildren(...(ipa ? [field("Name", ipa.name), field("Bundle id", ipa.bundleId, true),
+    fill(dyn.ipa, ...(ipa ? [field("Name", ipa.name), field("Bundle id", ipa.bundleId, true),
       field("Version", ipa.shortVersion + " (" + ipa.version + ")"), field("Minimum iOS", ipa.minimumOsVersion),
       field("Frameworks", String(ipa.frameworkCount)), field("Extensions", ipa.hasExtensions ? "yes" : "no"),
       field("Size", mb(ipa.sizeBytes))] : [h("p", { class: "muted", text: "No IPA has been chosen yet." })]));
     dyn.progress.hidden = !s.step;
     if (s.step) {
       const pct = s.step.percent;
-      dyn.progress.replaceChildren(h("h2", { text: "Progress" }), h("p", { text: s.step.label }),
+      fill(dyn.progress, h("h2", { text: "Progress" }), h("p", { text: s.step.label }),
         h("div", { class: "progress" }, pct === null ? h("div", { class: "indeterminate", style: "position:relative;width:40%" }) : h("div", { style: "width:" + pct + "%" })));
     }
     const o = s.lastOutcome;
@@ -272,7 +275,7 @@
       const steps = ["Settings > General > VPN & Device Management: trust your Apple ID's developer app.",
         "Settings > Privacy & Security > Developer Mode: turn it on and restart (iOS 16 and later)."];
       if (o.sideStoreFamily) steps.push(...STEPS_SIDESTORE(o));
-      dyn.outcome.replaceChildren(h("h2", { text: "Finish on the iPhone" }),
+      fill(dyn.outcome, h("h2", { text: "Finish on the iPhone" }),
         h("p", { text: o.name + " is installed as " + o.bundleId + ", valid for " + o.expiresInDays + " days." }),
         h("ol", {}, ...steps.map((t) => h("li", { text: t }))),
         o.sideStoreFamily && !o.pairingHandedOff ? h("p", { class: "error", text: "The pairing file could not be handed to SideStore; see Logs." }) : null);
@@ -290,10 +293,10 @@
   function renderApps() {
     const s = state;
     if (s.connection !== "READY") {
-      dyn.apps.replaceChildren(h("p", { class: "muted", text: "Connect the iPhone to see its sideloaded apps." }));
+      fill(dyn.apps, h("p", { class: "muted", text: "Connect the iPhone to see its sideloaded apps." }));
       return;
     }
-    dyn.apps.replaceChildren(...(s.apps.length ? s.apps.map((a) => h("div", { class: "item" },
+    fill(dyn.apps, ...(s.apps.length ? s.apps.map((a) => h("div", { class: "item" },
       h("div", {}, h("div", { class: "title", text: a.name }), h("div", { class: "muted mono", text: a.bundleId + " · " + a.shortVersion })),
       actionButton("Remove", () => { if (confirm("Remove " + a.name + " from the iPhone? Its data is deleted too.")) act("/api/apps/uninstall", { bundleId: a.bundleId }); }, "danger"))) :
       [h("p", { class: "muted", text: "No sideloaded apps were reported by the device." })]));
@@ -334,7 +337,7 @@
       $("twofa-hint").textContent = chosen ? "Enter the code sent by SMS to " + chosen.masked + "."
         : tf.phoneNumbers.length ? "Apple wants a code sent by SMS. Pick the number to send it to."
         : "Enter the code shown on one of your Apple devices.";
-      dyn.sms.replaceChildren(...tf.phoneNumbers.map((n) =>
+      fill(dyn.sms, ...tf.phoneNumbers.map((n) =>
         actionButton("Send SMS to " + n.masked, () => act("/api/2fa/sms", { numberId: n.id }))));
     }
     if (s.account) {
@@ -343,7 +346,7 @@
         radio.addEventListener("change", () => act("/api/team", { teamId: t.teamId }));
         return h("label", { class: "check" }, radio, h("span", { text: t.name + " (" + t.teamId + ")" + (t.free ? " · free" : "") }));
       });
-      dyn.account.replaceChildren(h("h2", { text: "Signed in" }), field("Apple ID", s.account.appleId),
+      fill(dyn.account, h("h2", { text: "Signed in" }), field("Apple ID", s.account.appleId),
         h("p", { class: "muted", text: "Development team" }), ...(teams.length ? teams : [h("p", { class: "muted", text: "This account has no development team." })]),
         h("div", { class: "row" },
           actionButton("Sign out", () => act("/api/signout")),
@@ -365,7 +368,7 @@
     views.Logs.append(h("div", { class: "card" },
       h("div", { class: "row spread" }, h("h2", { text: "Logs" }),
         h("div", { class: "row" }, h("button", { text: "Download", onclick: downloadLogs }),
-          h("button", { text: "Clear view", onclick: () => { logLines.length = 0; dyn.logs.replaceChildren(); } }))),
+          h("button", { text: "Clear view", onclick: () => { logLines.length = 0; fill(dyn.logs, ); } }))),
       h("p", { class: "muted", text: "Passwords, tokens, keys and serial numbers are removed before a line is logged." }),
       dyn.logs));
   }
@@ -423,7 +426,7 @@
     const st = state.settings;
     if (!anisettePrefilled) { anisetteInput.value = st.anisetteAddress; anisettePrefilled = true; }
     if (document.activeElement !== wifiCheck) wifiCheck.checked = st.wifiDiscovery;
-    dyn.chips.replaceChildren(...state.anisetteServers.map((srv) =>
+    fill(dyn.chips, ...state.anisetteServers.map((srv) =>
       h("button", { class: srv.address === st.effectiveAnisetteAddress ? "on" : "", text: srv.name, title: srv.address,
         onclick: () => { anisetteInput.value = srv.address; act("/api/settings", { anisetteAddress: srv.address }); } })));
     if (!wirelessInput.value && st.lastWirelessAddress) wirelessInput.value = st.lastWirelessAddress;
@@ -462,5 +465,9 @@
   }
 
   buildTabs();
+  window.addEventListener("hashchange", () => {
+    const name = location.hash.slice(1);
+    if (tabs.includes(name) && name !== current) select(name);
+  });
   poll(false);
 })();
