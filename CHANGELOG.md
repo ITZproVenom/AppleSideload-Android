@@ -6,7 +6,7 @@ as `build-<number>`. The build number is also the app's version code, so each
 build installs over the previous one. The *Unreleased* section becomes the
 notes of the next release.
 
-## Unreleased
+## build-25: new look, web controller on by default, iOS 27 SideStore builds
 
 ### iOS 27: the right SideStore build
 - When the iPhone runs iOS 27 or later, *SideStore + LiveContainer* and
