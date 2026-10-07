@@ -146,7 +146,13 @@ class PairingStore(context: Context) {
 
     private fun sanitise(udid: String) = udid.filter { it.isLetterOrDigit() || it == '-' }
 
-    /** Writes through a temporary file and a rename, so a crash never leaves half a record. */
+    /**
+     * Writes through a temporary file and a rename, so a crash never leaves
+     * half a record. Synchronized because the temporary file's name is fixed:
+     * two writers of one record (a pairing finishing while a connection
+     * updates it) would otherwise interleave in it.
+     */
+    @Synchronized
     private fun writeAtomically(file: File, bytes: ByteArray) {
         val temporary = File(file.parentFile, file.name + ".tmp")
         temporary.writeBytes(bytes)

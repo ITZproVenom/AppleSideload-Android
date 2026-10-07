@@ -81,10 +81,13 @@ internal class FakeTunnelPeer(
     }
 
     override fun close() {
-        // The link goes first: this is the tunnel being lost, so no service
-        // may get a goodbye (FIN) out on it while the reader winds down.
+        // This is the tunnel being lost, so no service may get a goodbye (FIN)
+        // out on it. Closing the link alone is not enough: its two directions
+        // close one after the other, and the reader winding down in between
+        // would let a service's FIN through. Every send holds the lock and
+        // checks this flag first.
+        lock.withLock { closed = true }
         runCatching { link.close() }
-        closed = true
         lock.withLock {
             connections.values.forEach { it.inbound.close() }
             changed.signalAll()
@@ -185,6 +188,7 @@ internal class FakeTunnelPeer(
 
     /** Writes one packet to the host. Lock held, so packets never interleave. */
     private fun send(packet: ByteArray) {
+        if (closed) throw IOException("the link to the host is gone")
         link.write(packet, 15_000)
     }
 

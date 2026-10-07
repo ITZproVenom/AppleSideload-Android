@@ -54,8 +54,8 @@ class RemotePairingNetwork(context: Context, private val store: PairingStore) {
         fun onAdvertised(serviceName: String)
         /** The iPhone connected and asked for the PIN; show [pin] to the user. */
         fun onPin(pin: String)
-        /** Pairing finished; [record] is already stored. */
-        fun onPaired(record: RpPairingFile, host: String)
+        /** Pairing finished; [record] is already stored. [host] is the iPhone's address, if known. */
+        fun onPaired(record: RpPairingFile, host: String?)
         /** Something went wrong; [fatal] means the advertisement has stopped. */
         fun onProblem(message: String, fatal: Boolean)
     }
@@ -130,15 +130,19 @@ class RemotePairingNetwork(context: Context, private val store: PairingStore) {
                 if (advertisement.isOpen) events.onProblem("the pairing listener stopped: ${error.message}", true)
                 return
             }
-            val peerHost = socket.inetAddress?.hostAddress?.substringBefore('%') ?: "?"
+            // Kept with its scope (fe80::...%wlan0): an iPhone often connects
+            // from its link-local address, which is only usable together with
+            // the interface it came in on.
+            val peerAddress = socket.inetAddress?.hostAddress
+            val peerHost = peerAddress ?: "an unknown address"
             Log.i(LogTag.PAIR, "an iPhone at $peerHost connected to pair")
             val transport = TcpTransport.accepted(socket)
             try {
                 val peer = PairableHost(RpChannel(transport, RpChannel.DEVICE), name)
                     .accept(identity) { pin -> events.onPin(pin) }
                 val record = identity.withDevice(peer)
-                store.saveRemote(record, peerHost)
-                events.onPaired(record, peerHost)
+                store.saveRemote(record, peerAddress)
+                events.onPaired(record, peerAddress)
                 runCatching { transport.close() }
                 advertisement.close()
                 return

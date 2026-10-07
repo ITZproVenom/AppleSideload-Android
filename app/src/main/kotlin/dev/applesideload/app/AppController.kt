@@ -542,7 +542,7 @@ class AppController(private val app: SideloadApplication) : Controls {
             }
         }
 
-        override fun onPaired(record: RpPairingFile, host: String) {
+        override fun onPaired(record: RpPairingFile, host: String?) {
             // The record is stored by now, whichever offer it came through.
             refreshRemoteDevices()
             val current = synchronized(pairingLock) {
