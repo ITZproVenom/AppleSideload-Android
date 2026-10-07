@@ -136,6 +136,16 @@ object Fixtures {
         lastOutcome = InstallOutcome("SideStore", "com.SideStore.SideStore.A1B2C3D4E5", 7, SpecialApp.SIDESTORE_LIVECONTAINER, true)
     )
 
+    /** What iOS 27 shows when the LiveContainer build predates SideStore's Remote Pairing support. */
+    val installedTooOld = ready.copy(
+        lastOutcome = InstallOutcome(
+            "SideStore", "com.SideStore.SideStore.A1B2C3D4E5", 7, SpecialApp.SIDESTORE_LIVECONTAINER, true,
+            warning = "This SideStore + LiveContainer build (nightly of 2026-09-18) is older than SideStore's " +
+                "iOS 27 support, so SideStore cannot refresh on the iPhone with it yet. Install it again from " +
+                "this app before the 7 days run out, or install SideStore only, whose newest build has that support."
+        )
+    )
+
     val settings = SettingsSnapshot(
         anisetteAddress = "",
         effectiveAnisetteAddress = "https://ani.sidestore.io",

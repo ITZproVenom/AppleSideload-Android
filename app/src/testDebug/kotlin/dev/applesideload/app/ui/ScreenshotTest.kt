@@ -97,6 +97,9 @@ class ScreenshotTest {
     fun install_done() = shoot("install_done", Destination.INSTALL) { Install(Fixtures.installed) }
 
     @Test
+    fun install_warning() = shoot("install_warning", Destination.INSTALL) { Install(Fixtures.installedTooOld) }
+
+    @Test
     fun install_ipa() = shoot("install_ipa", Destination.INSTALL) {
         Install(Fixtures.ready.copy(selectedIpa = Fixtures.ipa))
     }

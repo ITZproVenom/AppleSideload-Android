@@ -11,12 +11,23 @@ import java.net.NetworkInterface
  * A request is answered when it comes from this phone, from a private or
  * link-local address (home Wi-Fi, a hotspot, USB tethering), or from inside
  * the subnet of one of this phone's own non-mobile interfaces, for networks
- * that hand their devices public addresses. Anything else, such as a request
- * arriving over mobile data, is refused.
+ * that hand their devices public addresses. Anything else is refused, and so
+ * is everything that arrives over mobile data, private carrier addresses
+ * included.
  */
 object LocalNetwork {
 
+    /** Whether to answer [remote], which reached this phone at its address [local]. */
+    fun accepts(remote: InetAddress, local: InetAddress?): Boolean =
+        (local == null || !isMobileData(local)) && contains(remote)
+
     fun contains(address: InetAddress): Boolean = isPrivate(address) || onOwnSubnet(address)
+
+    /** Whether [local], one of this phone's addresses, belongs to a mobile-data interface. */
+    fun isMobileData(local: InetAddress): Boolean {
+        val name = runCatching { NetworkInterface.getByInetAddress(local)?.name }.getOrNull() ?: return false
+        return WebControl.label(name).startsWith("Mobile")
+    }
 
     /** Loopback, RFC 1918, link-local and IPv6 unique local addresses. */
     fun isPrivate(address: InetAddress): Boolean {

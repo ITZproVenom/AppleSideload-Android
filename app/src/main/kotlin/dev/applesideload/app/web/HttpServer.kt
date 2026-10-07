@@ -29,7 +29,9 @@ class HttpRequest(
     val headers: Map<String, String>,
     val contentLength: Long,
     val body: InputStream,
-    val remote: InetAddress?
+    val remote: InetAddress?,
+    /** This phone's address the request arrived on, which says over which network. */
+    val local: InetAddress? = null
 ) {
     fun header(name: String): String? = headers[name.lowercase(Locale.ROOT)]
 
@@ -127,7 +129,7 @@ class HttpServer(
                 client.tcpNoDelay = true
                 val buffered = client.getInputStream().buffered(16 * 1024)
                 input = buffered
-                val request = parse(buffered, client.inetAddress) ?: return
+                val request = parse(buffered, client.inetAddress, client.localAddress) ?: return
                 val response = try {
                     handler(request)
                 } catch (error: HttpError) {
@@ -165,7 +167,7 @@ class HttpServer(
     }
 
     /** Returns null when the client closed the connection without sending anything. */
-    private fun parse(input: InputStream, remote: InetAddress?): HttpRequest? {
+    private fun parse(input: InputStream, remote: InetAddress?, local: InetAddress?): HttpRequest? {
         val requestLine = readLine(input) ?: return null
         val parts = requestLine.split(' ')
         if (parts.size != 3 || !parts[2].startsWith("HTTP/1.")) throw HttpError(400, "Malformed request line.")
@@ -197,7 +199,7 @@ class HttpServer(
         val path = decode(rawPath)
         if (path.contains("..")) throw HttpError(400, "Invalid path.")
         val query = if (target.contains('?')) parseQuery(target.substringAfter('?')) else emptyMap()
-        return HttpRequest(method, path, query, headers, length, LimitedInputStream(input, length), remote)
+        return HttpRequest(method, path, query, headers, length, LimitedInputStream(input, length), remote, local)
     }
 
     private fun write(client: Socket, response: HttpResponse) {

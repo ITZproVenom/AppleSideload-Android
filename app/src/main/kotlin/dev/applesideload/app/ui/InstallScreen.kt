@@ -38,6 +38,7 @@ import dev.applesideload.device.ConnectionState
 import dev.applesideload.signing.IpaInfo
 import dev.applesideload.sideload.InstallOutcome
 import dev.applesideload.sideload.InstallSource
+import dev.applesideload.sideload.REMOTE_PAIRING_ONLY_FROM_IOS
 import dev.applesideload.sideload.SideloadStep
 import dev.applesideload.sideload.SpecialApp
 
@@ -57,10 +58,11 @@ fun InstallScreen(
     state.step?.let { ProgressCard(it, state.busy) }
     state.lastOutcome?.let { outcome ->
         DoneCard(outcome)
+        outcome.warning?.let { StatusCard(Tone.WARNING, Icons.Filled.WarningAmber, "Read this first", it) }
         FinishCard(outcome)
     }
     if (!connected || !signedIn) ChecklistCard(state, connected, signedIn, onNavigate)
-    SideStoreCard(ready, onInstallSource)
+    SideStoreCard(ready, state.device?.takeIf { connected }?.majorVersion, onInstallSource)
     CustomIpaCard(state, ready, onPickFile, onInstall)
     Hint(
         "A free Apple ID signs each app for 7 days, keeps up to 3 sideloaded apps on the iPhone " +
@@ -203,14 +205,24 @@ private fun CheckRow(done: Boolean, title: String, subtitle: String?, actionLabe
 }
 
 @Composable
-private fun SideStoreCard(ready: Boolean, onInstallSource: (InstallSource) -> Unit) =
+private fun SideStoreCard(ready: Boolean, ios: Int?, onInstallSource: (InstallSource) -> Unit) =
     SectionCard("SideStore + LiveContainer", icon = Icons.Filled.Storefront) {
+        val newest = ios != null && ios >= REMOTE_PAIRING_ONLY_FROM_IOS
         Text(
-            "The latest release from GitHub, signed with your Apple ID. SideStore also gets the " +
-                "pairing file, so it can refresh itself and your apps on the iPhone with LocalDevVPN, " +
-                "with no computer.",
+            if (newest) {
+                "The newest build on GitHub, nightly builds included, because on iOS $ios only " +
+                    "SideStore's newest builds can refresh on the iPhone. It is signed with your Apple ID, " +
+                    "and SideStore also gets the pairing file it needs with LocalDevVPN."
+            } else {
+                "The latest release from GitHub, signed with your Apple ID. SideStore also gets the " +
+                    "pairing file, so it can refresh itself and your apps on the iPhone with LocalDevVPN, " +
+                    "with no computer."
+            },
             style = MaterialTheme.typography.bodyMedium
         )
+        if (newest) {
+            Hint("Each build is checked after it downloads, and you are told if its SideStore cannot refresh on iOS $ios yet.")
+        }
         Button(
             onClick = { onInstallSource(InstallSource.SIDESTORE_LIVECONTAINER) },
             enabled = ready,

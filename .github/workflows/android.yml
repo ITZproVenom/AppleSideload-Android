@@ -2,6 +2,8 @@ name: Android APK
 on:
   push:
     branches: [main]
+    # Documentation alone does not make a release.
+    paths-ignore: ['**.md']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -52,4 +54,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
-          gh release create "$TAG" AppleSideload.apk --title "AppleSideload build ${{ github.run_number }}" --notes "Automated build of ${GITHUB_SHA::7}. Untested on hardware; see README for limitations." --latest
+          # The Unreleased section of CHANGELOG.md, when there is one, is the release notes.
+          awk '/^## /{ if (found) exit; if ($0 ~ /^## Unreleased/) { found = 1; next } } found' CHANGELOG.md > notes.md || true
+          [ -s notes.md ] || echo "Automated build of ${GITHUB_SHA::7}." > notes.md
+          printf '\nBuilt from %s. Not fully tested on hardware; see the README for limitations.\n' "${GITHUB_SHA::7}" >> notes.md
+          gh release create "$TAG" AppleSideload.apk --title "AppleSideload build ${{ github.run_number }}" --notes-file notes.md --latest

@@ -314,7 +314,8 @@
       fill(dyn.outcome, h("h2", { text: "Finish on the iPhone" }),
         h("p", { text: o.name + " is installed as " + o.bundleId + ", valid for " + o.expiresInDays + " days." }),
         h("ol", {}, ...steps.map((t) => h("li", { text: t }))),
-        o.sideStoreFamily && !o.pairingHandedOff ? h("p", { class: "error", text: "The pairing file could not be handed to SideStore; see Logs." }) : null);
+        o.sideStoreFamily && !o.pairingHandedOff ? h("p", { class: "error", text: "The pairing file could not be handed to SideStore; see Logs." }) : null,
+        o.warning ? h("p", { class: "hint", text: o.warning }) : null);
     }
   }
 

@@ -333,7 +333,7 @@ class WebApiTest {
                 override fun <T> call(block: () -> T): T = block()
             },
             newUploadFile = { File(folder.root, "outside.ipa") },
-            isLocal = { false }
+            isLocal = { _, _ -> false }
         )
         val request = HttpRequest(
             "GET", "/", emptyMap(), mapOf("host" to "192.168.1.50:8686"), 0,

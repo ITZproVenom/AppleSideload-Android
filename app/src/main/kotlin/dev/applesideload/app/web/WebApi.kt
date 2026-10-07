@@ -29,8 +29,8 @@ class WebApi(
     /** A fresh file to receive an uploaded IPA. */
     private val newUploadFile: () -> File,
     private val maxUploadBytes: Long = MAX_UPLOAD_BYTES,
-    /** Whether a client address is on this phone's network. */
-    private val isLocal: (InetAddress) -> Boolean = LocalNetwork::contains
+    /** Whether a client (first) that reached this phone at its address (second) is on the phone's network. */
+    private val isLocal: (InetAddress, InetAddress?) -> Boolean = LocalNetwork::accepts
 ) {
 
     interface MainThread {
@@ -112,7 +112,7 @@ class WebApi(
     /**
      * Who the controller will not answer, since it has no login.
      *
-     * - Devices outside this phone's network, for example over mobile data.
+     * - Devices outside this phone's network, and anything over mobile data.
      * - Requests addressed to a name rather than to the phone's address (an
      *   IP or localhost). This stops DNS rebinding, where a website points
      *   its own name at this phone to read the controller through the
@@ -123,7 +123,7 @@ class WebApi(
      */
     private fun refusal(request: HttpRequest): HttpResponse? {
         val remote = request.remote
-        if (remote == null || !isLocal(remote)) {
+        if (remote == null || !isLocal(remote, request.local)) {
             return HttpResponse.text(403, "Only devices on the same local network as the phone can use the web controller.")
         }
         val host = request.header("host")?.trim().orEmpty()
