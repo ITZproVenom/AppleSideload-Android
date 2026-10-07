@@ -210,7 +210,13 @@ private fun NearbyCard(state: UiState, onRefresh: () -> Unit, onConnect: (Discov
         }
     ) {
         if (state.discovered.isEmpty()) {
-            Hint("No iPhone found. Plug one in with a USB cable and allow access when Android asks.")
+            Hint(
+                if (ready) {
+                    "No other iPhone found. To add one, plug it in with a USB cable."
+                } else {
+                    "No iPhone found. Plug one in with a USB cable and allow access when Android asks."
+                }
+            )
         }
         val usbCount = state.discovered.count { it is DiscoveredDevice.Usb }
         state.discovered.forEach { found ->

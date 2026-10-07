@@ -140,6 +140,8 @@ private fun WebControllerCard(web: WebStatus, onWebEnabled: (Boolean) -> Unit, o
 private fun AnisetteCard(state: UiState, settings: SettingsSnapshot, onAnisetteAddress: (String) -> Unit) =
     SectionCard("Attestation source", icon = Icons.Filled.Dns) {
         var address by rememberSaveable { mutableStateOf(settings.anisetteAddress) }
+        val addressValid = address.isBlank() ||
+            address.trim().let { it.startsWith("https://") || it.startsWith("http://") }
         Text(
             "Apple's sign-in needs attestation data that only Apple's own code can make, and it " +
                 "cannot run on Android. This app asks the server below for it. The server never " +
@@ -154,6 +156,16 @@ private fun AnisetteCard(state: UiState, settings: SettingsSnapshot, onAnisetteA
             },
             label = { Text("Server address") },
             placeholder = { Text(AnisetteServers.default.address) },
+            isError = !addressValid,
+            supportingText = {
+                Text(
+                    when {
+                        address.isBlank() -> "Leave it empty to use the default (${AnisetteServers.default.name})."
+                        !addressValid -> "Enter the full address, starting with https://"
+                        else -> "Or pick one of these public servers:"
+                    }
+                )
+            },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth()

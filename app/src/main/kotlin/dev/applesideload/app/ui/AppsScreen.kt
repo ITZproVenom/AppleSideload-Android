@@ -63,7 +63,9 @@ fun AppsScreen(
     }
     val idle = state.busy == null
     var removing by remember { mutableStateOf<InstalledApp?>(null) }
-    val (fromStore, sideloaded) = state.apps.partition { it.fromAppStore }
+    val fromStore = state.apps.filter { it.fromAppStore }
+    val sideloaded = state.apps.filter { it.signerIdentity != null && !it.fromAppStore }
+    val unknownSigner = state.apps.filter { it.signerIdentity == null }
 
     Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -91,6 +93,13 @@ fun AppsScreen(
         SectionCard("Sideloaded", icon = Icons.Filled.VerifiedUser) {
             AppList(sideloaded, idle) { removing = it }
             Hint("Signed by a developer, not by Apple. A free Apple ID can have 3 apps of its own installed at a time.")
+        }
+    }
+
+    if (unknownSigner.isNotEmpty()) {
+        SectionCard("Other apps", icon = Icons.Outlined.Apps) {
+            AppList(unknownSigner, idle) { removing = it }
+            Hint("iOS did not say who signed these, so this app cannot tell whether they count towards the free account's limit.")
         }
     }
 
