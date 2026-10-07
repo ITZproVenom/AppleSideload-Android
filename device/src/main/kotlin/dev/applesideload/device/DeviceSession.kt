@@ -58,7 +58,14 @@ interface DeviceChannel : Closeable {
 
 /** USB: every connection is a mux channel on the one claimed interface. */
 class UsbChannel(private val transport: UsbTransport) : DeviceChannel {
-    private val mux = MuxDevice(transport).apply { start() }
+    private val mux = try {
+        MuxDevice(transport).apply { start() }
+    } catch (error: Throwable) {
+        // Nothing else owns the transport yet. Releasing it here is what lets
+        // the next attempt claim the interface instead of finding it taken.
+        runCatching { transport.close() }
+        throw error
+    }
     override fun connect(port: Int): Transport = mux.connect(port)
     override val description: String get() = "USB"
     override fun close() {

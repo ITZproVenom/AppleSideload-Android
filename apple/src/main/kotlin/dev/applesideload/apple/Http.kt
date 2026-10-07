@@ -27,7 +27,8 @@ data class HttpResponse(val code: Int, val body: ByteArray, val headers: Map<Str
  * Apple's identity and developer endpoints speak property lists over HTTPS
  * with a handful of required headers, which is not enough to justify a
  * networking library. Everything here is plain HttpsURLConnection, and TLS
- * is never relaxed.
+ * is never relaxed: Apple's hosts may additionally chain to Apple's own
+ * published roots ([AppleTrust]), and every other check still applies.
  */
 class Http(private val timeoutMs: Int = 30_000) {
 
@@ -40,6 +41,11 @@ class Http(private val timeoutMs: Int = 30_000) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             if (this !is HttpsURLConnection && !url.startsWith("http://")) {
                 throw IOException("refusing to send credentials over a plain connection")
+            }
+            if (this is HttpsURLConnection && AppleTrust.appliesTo(this.url.host)) {
+                // gsa.apple.com chains to Apple's own root, which Android does
+                // not ship; see AppleTrust.
+                sslSocketFactory = appleSockets()
             }
             requestMethod = method
             connectTimeout = timeoutMs
@@ -59,6 +65,12 @@ class Http(private val timeoutMs: Int = 30_000) {
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun appleSockets() = try {
+        AppleTrust.socketFactory
+    } catch (error: Exception) {
+        throw IOException("Apple's root certificates could not be loaded: ${error.message}", error)
     }
 
     /** Posts an XML plist and parses whatever plist comes back. */

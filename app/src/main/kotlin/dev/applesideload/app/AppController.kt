@@ -356,9 +356,18 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
-    override fun loadApps(): Action = run("Reading the app list") { readApps() }
+    override fun loadApps(): Action {
+        // Asking with nothing connected is a mistake to point out, not a failure to log.
+        if (session == null) return refuse("Connect and pair an iPhone first.")
+        return run("Reading the app list") { readApps() }
+    }
 
-    override fun uninstall(bundleId: String): Action = run("Removing $bundleId") {
+    override fun uninstall(bundleId: String): Action {
+        if (session == null) return refuse("Connect and pair an iPhone first.")
+        return removeApp(bundleId)
+    }
+
+    private fun removeApp(bundleId: String): Action = run("Removing $bundleId") {
         val active = requireSession("removing $bundleId")
         active.installationProxy().use { it.uninstall(bundleId) }
         set { it.copy(notice = "Removed $bundleId") }
