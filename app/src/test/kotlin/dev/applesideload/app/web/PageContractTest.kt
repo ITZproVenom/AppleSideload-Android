@@ -73,11 +73,16 @@ class PageContractTest {
         for (path in paths) {
             val method = if (path in setOf("/api/state", "/api/logs", "/api/logs/export")) "GET" else "POST"
             val body = "{}".toByteArray()
-            val reply = api.handle(
-                HttpRequest(method, path, emptyMap(), mapOf("content-type" to "application/json"), body.size.toLong(), body.inputStream(), null)
-            )
-            assertNotEquals("$path is not a route", 404, reply.status)
-            assertNotEquals("$path does not take $method", 405, reply.status)
+            // The server answers a thrown HttpError with its status.
+            val status = try {
+                api.handle(
+                    HttpRequest(method, path, emptyMap(), mapOf("content-type" to "application/json"), body.size.toLong(), body.inputStream(), null)
+                ).status
+            } catch (error: HttpError) {
+                error.status
+            }
+            assertNotEquals("$path is not a route", 404, status)
+            assertNotEquals("$path does not take $method", 405, status)
         }
     }
 }
