@@ -154,7 +154,7 @@ class WebControlService : Service() {
         }
         val text = where
         return builder
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Web controller is running")
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(
