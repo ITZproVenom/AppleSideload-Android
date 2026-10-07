@@ -97,6 +97,7 @@ data class StatusColors(
     val success: Color,
     val successContainer: Color,
     val onSuccessContainer: Color,
+    val warning: Color,
     val warningContainer: Color,
     val onWarningContainer: Color
 )
@@ -105,6 +106,7 @@ private val LightStatus = StatusColors(
     success = Color(0xFF146C2E),
     successContainer = Color(0xFFB8F1BF),
     onSuccessContainer = Color(0xFF002107),
+    warning = Color(0xFF7C5800),
     warningContainer = Color(0xFFFFDEA6),
     onWarningContainer = Color(0xFF271900)
 )
@@ -113,6 +115,7 @@ private val DarkStatus = StatusColors(
     success = Color(0xFF9DD5A4),
     successContainer = Color(0xFF1F5130),
     onSuccessContainer = Color(0xFFB8F1BF),
+    warning = Color(0xFFF0BF48),
     warningContainer = Color(0xFF5C4300),
     onWarningContainer = Color(0xFFFFDEA6)
 )

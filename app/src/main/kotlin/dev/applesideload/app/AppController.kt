@@ -340,7 +340,12 @@ class AppController(private val app: SideloadApplication) : Controls {
             // A session that never paired is no use; drop it so the screens do
             // not keep showing "waiting for Trust" and a retry starts clean.
             runCatching { opened.close() }
-            release(opened)
+            if (!release(opened)) {
+                // Disconnect (Cancel, on the phone or the web page) took the
+                // session away while it waited for Trust: stopped, not failed.
+                Log.i(LogTag.APP, "stopped waiting for the iPhone to trust this phone")
+                return
+            }
             set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
             throw error
         }

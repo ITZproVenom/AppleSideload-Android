@@ -1,6 +1,20 @@
 package dev.applesideload.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Switch
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -263,4 +277,193 @@ fun ConfirmDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/** How a status reads at a glance; each has its own colours. */
+enum class Tone { NEUTRAL, WORKING, SUCCESS, WARNING, ERROR }
+
+/** The container colour of [tone] and the colour of what is drawn on it. */
+@Composable
+fun toneColors(tone: Tone): Pair<Color, Color> {
+    val scheme = MaterialTheme.colorScheme
+    val status = AppColors.status
+    return when (tone) {
+        Tone.NEUTRAL -> scheme.surfaceContainerHigh to scheme.onSurface
+        Tone.WORKING -> scheme.secondaryContainer to scheme.onSecondaryContainer
+        Tone.SUCCESS -> status.successContainer to status.onSuccessContainer
+        Tone.WARNING -> status.warningContainer to status.onWarningContainer
+        Tone.ERROR -> scheme.errorContainer to scheme.onErrorContainer
+    }
+}
+
+/**
+ * The card at the top of a screen that says how things stand, coloured by
+ * [tone]. Work in progress shows a spinner instead of [icon].
+ */
+@Composable
+fun StatusCard(
+    tone: Tone,
+    icon: ImageVector,
+    title: String,
+    subtitle: String?,
+    modifier: Modifier = Modifier,
+    content: (@Composable ColumnScope.() -> Unit)? = null
+) {
+    val (container, onContainer) = toneColors(tone)
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = container, contentColor = onContainer)
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(onContainer.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (tone == Tone.WORKING) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = onContainer, strokeWidth = 2.5.dp)
+                    } else {
+                        Icon(icon, contentDescription = null, tint = onContainer, modifier = Modifier.size(26.dp))
+                    }
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge)
+                    if (subtitle != null) {
+                        Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = onContainer.copy(alpha = 0.8f))
+                    }
+                }
+            }
+            content?.invoke(this)
+        }
+    }
+}
+
+/** A row in a card's list: something to lead with, a title and a line under it, and actions at the end. */
+@Composable
+fun ListRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    monospaceSubtitle: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        leading?.invoke()
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = if (monospaceSubtitle) FontFamily.Monospace else FontFamily.Default
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        trailing?.invoke(this)
+    }
+}
+
+/** A setting that is on or off; the whole row toggles it. */
+@Composable
+fun SwitchRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
+    enabled: Boolean = true
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) Hint(subtitle)
+        }
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+    }
+}
+
+/** A row that opens another screen. */
+@Composable
+fun NavigationRow(title: String, subtitle: String?, icon: ImageVector, onClick: () -> Unit) {
+    ListRow(
+        title = title,
+        subtitle = subtitle,
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick, role = Role.Button),
+        leading = { IconBadge(icon) },
+        trailing = {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    )
+}
+
+/** A PIN to type on another device, one digit per box so it reads at a glance. */
+@Composable
+fun PinBoxes(pin: String, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier
+                .widthIn(max = 320.dp)
+                .fillMaxWidth()
+                .clearAndSetSemantics { contentDescription = "PIN " + pin.toList().joinToString(" ") },
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            pin.forEach { digit ->
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(60.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            digit.toString(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Work in progress, as one line with a spinner in front. */
+@Composable
+fun ProgressLine(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        Text(text, style = MaterialTheme.typography.bodyLarge)
+    }
 }
