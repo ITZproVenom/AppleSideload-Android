@@ -54,6 +54,9 @@ android {
             excludes += "/META-INF/*.RSA"
         }
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
     lint {
         abortOnError = true
         warningsAsErrors = false
@@ -87,6 +90,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
+    // Android's own org.json is a stub in local unit tests; this is the real one.
+    testImplementation(libs.orgjson)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.espresso)
 }

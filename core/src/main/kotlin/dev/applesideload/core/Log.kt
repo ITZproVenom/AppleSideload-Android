@@ -35,7 +35,9 @@ data class LogLine(
     val at: Long,
     val level: LogLevel,
     val tag: LogTag,
-    val message: String
+    val message: String,
+    /** Increases by one per line, so a reader can ask for what came after it. */
+    val sequence: Long = 0
 ) {
     fun format(): String {
         val stamp = STAMP.format(Date(at))
@@ -60,6 +62,8 @@ object Log {
 
     private val _lines = MutableStateFlow<List<LogLine>>(emptyList())
     val lines: StateFlow<List<LogLine>> = _lines.asStateFlow()
+
+    private var sequence = 0L
 
     @Volatile
     var debugEnabled: Boolean = false
@@ -94,10 +98,12 @@ object Log {
     }
 
     private fun record(level: LogLevel, tag: LogTag, message: String) {
-        val line = LogLine(System.currentTimeMillis(), level, tag, Redaction.apply(message))
-        synchronized(this) {
-            val next = _lines.value + line
-            _lines.value = if (next.size > LIMIT) next.subList(next.size - LIMIT, next.size) else next
+        val scrubbed = Redaction.apply(message)
+        val line = synchronized(this) {
+            val created = LogLine(System.currentTimeMillis(), level, tag, scrubbed, ++sequence)
+            val next = _lines.value + created
+            _lines.value = if (next.size > LIMIT) next.subList(next.size - LIMIT, next.size).toList() else next
+            created
         }
         when (level) {
             LogLevel.DEBUG -> AndroidLog.d(tag.label, line.message)

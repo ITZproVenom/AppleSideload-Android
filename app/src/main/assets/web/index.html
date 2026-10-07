@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AppleSideload</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><img src="icon.svg" alt="" class="logo small"> AppleSideload</div>
+    <div id="status-pill" class="pill">…</div>
+  </header>
+  <div id="busy" class="busy" hidden><div class="bar"><div class="indeterminate"></div></div><span id="busy-label"></span></div>
+  <nav id="tabs"></nav>
+  <main id="views"></main>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="offline" class="offline" hidden>The phone is not answering. Is the app still running and on the same network?</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

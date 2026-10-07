@@ -1,13 +1,15 @@
 package dev.applesideload.app
 
+import android.Manifest
 import android.content.ClipData
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,15 +37,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.applesideload.app.web.WebControlService
 import dev.applesideload.app.ui.AccountScreen
 import dev.applesideload.app.ui.AppleSideloadTheme
 import dev.applesideload.app.ui.AppsScreen
@@ -67,23 +67,46 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 class MainActivity : ComponentActivity() {
 
 
-    private val viewModel: AppViewModel by viewModels {
-        viewModelFactory {
-            initializer { AppViewModel(application as SideloadApplication) }
+    private val sideload: SideloadApplication get() = application as SideloadApplication
+
+    /** Lives with the process, shared with the web controller. */
+    private val viewModel: AppController get() = sideload.controller
+
+    private val askForNotifications = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        // The controller runs either way; without the permission its
+        // notification (address, Stop) is just not shown.
+        WebControlService.start(this)
+        if (!granted) {
+            dev.applesideload.core.Log.w(
+                dev.applesideload.core.LogTag.APP,
+                "notifications are off, so the web controller's address only shows in Settings"
+            )
+        }
+    }
+
+    private fun startWebControl() {
+        sideload.webControl.clearError()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            WebControlService.start(this)
         }
     }
 
     @androidx.compose.material3.ExperimentalMaterial3Api
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val settings = (application as SideloadApplication).settings
 
         setContent {
             AppleSideloadTheme {
                 val state by viewModel.state.collectAsState()
                 val logs by viewModel.logs.collectAsState()
+                val web by sideload.webControl.status.collectAsState()
                 var destination by remember { mutableStateOf(Destination.HOME) }
-                var settingsRevision by remember { mutableIntStateOf(0) }
                 val snackbar = remember { SnackbarHostState() }
 
                 val pickFile = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -132,7 +155,7 @@ class MainActivity : ComponentActivity() {
                             when (destination) {
                                 Destination.HOME -> HomeScreen(
                                     state = state,
-                                    lastWirelessAddress = settings.lastWirelessAddress,
+                                    lastWirelessAddress = viewModel.settingsSnapshot().lastWirelessAddress,
                                     onRefresh = viewModel::refreshDevices,
                                     onConnect = viewModel::connect,
                                     onConnectWireless = viewModel::connectWireless,
@@ -156,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
                                 Destination.ACCOUNT -> AccountScreen(
                                     state = state,
-                                    lastAppleId = settings.lastAppleId,
+                                    lastAppleId = viewModel.settingsSnapshot().lastAppleId,
                                     onSignIn = viewModel::signIn,
                                     onSubmitCode = viewModel::submitTwoFactorCode,
                                     onRequestPhoneCode = viewModel::requestPhoneCode,
@@ -181,8 +204,14 @@ class MainActivity : ComponentActivity() {
 
                                 Destination.SETTINGS -> SettingsScreen(
                                     state = state,
-                                    settings = settings,
-                                    onChanged = { settingsRevision++ }
+                                    settings = viewModel.settingsSnapshot(),
+                                    web = web,
+                                    onAnisetteAddress = viewModel::setAnisetteAddress,
+                                    onWifiDiscovery = viewModel::setWifiDiscovery,
+                                    onWebEnabled = { enabled ->
+                                        if (enabled) startWebControl() else WebControlService.stop(this@MainActivity)
+                                    },
+                                    onWebPort = { sideload.webControl.setPort(it) }
                                 )
                             }
                         }

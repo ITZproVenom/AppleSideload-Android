@@ -33,7 +33,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.applesideload.app.SelectedIpa
-import dev.applesideload.app.Settings
+import dev.applesideload.app.SettingsSnapshot
+import dev.applesideload.app.web.WebStatus
 import dev.applesideload.app.UiState
 import dev.applesideload.core.LogLine
 import dev.applesideload.device.ConnectionState
@@ -432,9 +433,55 @@ fun DiagnosticsScreen(
 }
 
 @Composable
-fun SettingsScreen(state: UiState, settings: Settings, onChanged: () -> Unit) = Screen {
+fun SettingsScreen(
+    state: UiState,
+    settings: SettingsSnapshot,
+    web: WebStatus,
+    onAnisetteAddress: (String) -> Unit,
+    onWifiDiscovery: (Boolean) -> Unit,
+    onWebEnabled: (Boolean) -> Unit,
+    onWebPort: (Int) -> Unit
+) = Screen {
     var address by remember { mutableStateOf(settings.anisetteAddress) }
-    var wifi by remember { mutableStateOf(settings.wifiDiscovery) }
+    var port by remember(web.port) { mutableStateOf(web.port.toString()) }
+
+    Panel("Web controller") {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Control this app from a browser", modifier = Modifier.weight(1f))
+            Switch(checked = web.running, onCheckedChange = onWebEnabled)
+        }
+        Text(
+            "Open the address below in a browser on any device on the same network - Wi-Fi, this " +
+                "phone's hotspot, or USB/Ethernet tethering. Everything this app does can be done " +
+                "from there, with no login.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        web.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        if (web.running) {
+            if (web.addresses.isEmpty()) {
+                Text("No network is connected. Join Wi-Fi or turn on a hotspot or USB tethering.")
+            }
+            web.addresses.forEach { Field(it.label, it.url, monospace = true) }
+        } else {
+            OutlinedTextField(
+                value = port,
+                onValueChange = { typed ->
+                    port = typed.filter { it.isDigit() }.take(5)
+                    port.toIntOrNull()?.takeIf { it in 1024..65535 }?.let(onWebPort)
+                },
+                label = { Text("Port") },
+                isError = port.toIntOrNull()?.let { it !in 1024..65535 } ?: true,
+                supportingText = { Text("1024 to 65535") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
 
     Panel("Attestation source") {
         Text(
@@ -447,8 +494,7 @@ fun SettingsScreen(state: UiState, settings: Settings, onChanged: () -> Unit) = 
             value = address,
             onValueChange = {
                 address = it
-                settings.anisetteAddress = it
-                onChanged()
+                onAnisetteAddress(it)
             },
             label = { Text("Address") },
             placeholder = { Text(dev.applesideload.apple.AnisetteServers.default.address) },
@@ -460,8 +506,7 @@ fun SettingsScreen(state: UiState, settings: Settings, onChanged: () -> Unit) = 
                 selected = settings.effectiveAnisetteAddress == server.address,
                 onClick = {
                     address = server.address
-                    settings.anisetteAddress = server.address
-                    onChanged()
+                    onAnisetteAddress(server.address)
                 },
                 label = { Text(server.name) }
             )
@@ -475,14 +520,7 @@ fun SettingsScreen(state: UiState, settings: Settings, onChanged: () -> Unit) = 
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Look for devices over Wi-Fi")
-            Switch(
-                checked = wifi,
-                onCheckedChange = {
-                    wifi = it
-                    settings.wifiDiscovery = it
-                    onChanged()
-                }
-            )
+            Switch(checked = settings.wifiDiscovery, onCheckedChange = onWifiDiscovery)
         }
         Text(
             "Only devices already paired with this app and with Wi-Fi sync enabled advertise " +
