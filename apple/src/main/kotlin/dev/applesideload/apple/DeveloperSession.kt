@@ -25,7 +25,9 @@ data class DeveloperCertificate(
     val serialNumber: String,
     val name: String,
     val machineName: String?,
-    val data: ByteArray
+    val data: ByteArray,
+    /** The machine id the certificate was requested with; AltStore uses it as the p12 password. */
+    val machineId: String? = null
 ) {
     override fun equals(other: Any?): Boolean =
         other is DeveloperCertificate && other.certificateId == certificateId
@@ -127,7 +129,8 @@ class DeveloperSession(
                     serialNumber = entry["serialNumber"]?.asString.orEmpty(),
                     name = entry["name"]?.asString.orEmpty(),
                     machineName = entry["machineName"]?.asString,
-                    data = data
+                    data = data,
+                    machineId = entry["machineId"]?.asString
                 )
             }
 
@@ -139,12 +142,13 @@ class DeveloperSession(
      * for anything else signed with it, which is why it is not done here.
      */
     fun submitCertificateRequest(teamId: String, csrPem: String, machineName: String): DeveloperCertificate {
+        val machineId = UUID.randomUUID().toString().uppercase()
         val reply = post(
             "ios/submitDevelopmentCSR.action",
             teamId,
             mapOf(
                 "csrContent" to Plist.Str(csrPem),
-                "machineId" to Plist.Str(UUID.randomUUID().toString().uppercase()),
+                "machineId" to Plist.Str(machineId),
                 "machineName" to Plist.Str(machineName)
             )
         )
@@ -156,7 +160,8 @@ class DeveloperSession(
             name = request["name"]?.asString.orEmpty(),
             machineName = machineName,
             data = request["certContent"]?.asData
-                ?: throw DeveloperServiceException(0, "the signed certificate was empty")
+                ?: throw DeveloperServiceException(0, "the signed certificate was empty"),
+            machineId = request["machineId"]?.asString ?: machineId
         )
     }
 
@@ -243,13 +248,22 @@ class DeveloperSession(
         )
     }
 
+    /** Finds the app group with [identifier], creating it if the account has none. */
+    fun ensureAppGroup(teamId: String, identifier: String, name: String): AppGroup =
+        listAppGroups(teamId).firstOrNull { it.identifier == identifier }
+            ?: addAppGroup(teamId, identifier, name.filter { it.isLetterOrDigit() || it == ' ' }.ifBlank { "App Group" })
+
+    /** Turns on the App Groups capability, which a group can only be assigned with. */
+    fun enableAppGroups(teamId: String, appIdId: String) =
+        updateAppIdFeatures(teamId, appIdId, mapOf(FEATURE_APP_GROUPS to Plist.Bool(true)))
+
     fun assignAppGroup(teamId: String, appIdId: String, groupId: String) {
         post(
             "ios/assignApplicationGroupToAppId.action",
             teamId,
             mapOf(
                 "appIdId" to Plist.Str(appIdId),
-                "applicationGroups" to Plist.Arr(listOf(Plist.Str(groupId)))
+                "applicationGroups" to Plist.Str(groupId)
             )
         )
     }
@@ -357,6 +371,7 @@ class DeveloperSession(
         const val BASE = "https://developerservices2.apple.com/services/QH65B2/"
         const val CLIENT_ID = "XABBG36SBA"
         const val PROTOCOL = "QH65B2"
+        const val FEATURE_APP_GROUPS = "APG3427HIY"
         const val CLIENT_INFO =
             "<MacBookPro13,2> <Mac OS X;10.15.2;19C57> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>"
     }

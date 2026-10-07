@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -37,7 +38,9 @@ import dev.applesideload.app.UiState
 import dev.applesideload.core.LogLine
 import dev.applesideload.device.ConnectionState
 import dev.applesideload.device.DiscoveredDevice
+import dev.applesideload.sideload.InstallSource
 import dev.applesideload.sideload.SideloadStep
+import dev.applesideload.sideload.SpecialApp
 
 /** The screen scaffolding every destination uses. */
 @Composable
@@ -54,8 +57,10 @@ private fun Screen(content: @Composable () -> Unit) {
 @Composable
 fun HomeScreen(
     state: UiState,
+    lastWirelessAddress: String,
     onRefresh: () -> Unit,
     onConnect: (DiscoveredDevice) -> Unit,
+    onConnectWireless: (String) -> Unit,
     onDisconnect: () -> Unit
 ) = Screen {
     Panel("Connection") {
@@ -79,7 +84,7 @@ fun HomeScreen(
         if (state.discovered.isEmpty()) {
             Text(
                 "No iPhone found. Connect one with a USB cable and allow access when " +
-                    "Android asks, or enable Wi-Fi sync on a device already paired with this app.",
+                    "Android asks, or use wireless mode below.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -95,10 +100,32 @@ fun HomeScreen(
         }
     }
 
+    Panel("Wireless mode (no cable)") {
+        var address by rememberSaveable { mutableStateOf(lastWirelessAddress) }
+        Text(
+            "Put both phones on the same Wi-Fi network, unlock the iPhone, and enter its address " +
+                "from Settings > Wi-Fi > (i). The iPhone asks to Trust this phone; after that, " +
+                "installs go over Wi-Fi.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedTextField(
+            value = address,
+            onValueChange = { address = it },
+            label = { Text("iPhone IP address") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = { onConnectWireless(address) },
+            enabled = state.busy == null && address.isNotBlank()
+        ) { Text("Connect wirelessly") }
+    }
+
     Panel("What this does") {
         Text(
             "Signs an iOS app with your own Apple account and installs it on your iPhone " +
-                "over the cable. Nothing is sent to a PC or a Mac. A free account gives a " +
+                "over the cable or Wi-Fi. Nothing is sent to a PC or a Mac. A free account gives a " +
                 "seven day signature, three installed apps at a time, and ten new app " +
                 "identifiers a week; those are Apple's limits, not this app's.",
             style = MaterialTheme.typography.bodyMedium
@@ -145,10 +172,37 @@ fun DeviceScreen(state: UiState) = Screen {
 @Composable
 fun InstallScreen(
     state: UiState,
+    onInstallSource: (InstallSource) -> Unit,
     onPickFile: () -> Unit,
     onInstall: () -> Unit
 ) = Screen {
-    Panel("App") {
+    val ready = state.connection == ConnectionState.READY && state.account != null && state.busy == null
+    if (state.connection != ConnectionState.READY || state.account == null) {
+        Panel("Before installing") {
+            if (state.connection != ConnectionState.READY) {
+                Text("Connect and pair the iPhone on the Device screen.")
+            }
+            if (state.account == null) {
+                Text("Sign in with your Apple ID on the Account screen; the signature comes from a real certificate Apple issues to it.")
+            }
+        }
+    }
+
+    Panel("SideStore + LiveContainer") {
+        Text(
+            "Downloads the latest LiveContainer + SideStore release from LiveContainer's GitHub, signs it with " +
+                "your Apple ID, installs it, and gives SideStore the pairing file so it can refresh " +
+                "itself and your apps on the iPhone with LocalDevVPN, the same way SideInstaller sets it up."
+        )
+        Button(onClick = { onInstallSource(InstallSource.SIDESTORE_LIVECONTAINER) }, enabled = ready) {
+            Text("Install SideStore + LiveContainer")
+        }
+        TextButton(onClick = { onInstallSource(InstallSource.SIDESTORE) }, enabled = ready) {
+            Text("Install SideStore only")
+        }
+    }
+
+    Panel("Custom IPA") {
         val selected: SelectedIpa? = state.selectedIpa
         if (selected == null) {
             Text("Choose an .ipa file to inspect and install.")
@@ -162,27 +216,8 @@ fun InstallScreen(
             Field("Size", "%.1f MB".format(selected.info.sizeBytes / 1_000_000.0))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onPickFile) { Text("Choose file") }
-            Button(
-                onClick = onInstall,
-                enabled = state.selectedIpa != null &&
-                    state.connection == ConnectionState.READY &&
-                    state.account != null &&
-                    state.busy == null
-            ) { Text("Sign and install") }
-        }
-        if (state.connection != ConnectionState.READY) {
-            Text(
-                "Connect and pair an iPhone first.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        if (state.account == null) {
-            Text(
-                "Sign in with an Apple account first; the signature has to come from a real " +
-                    "certificate issued to it.",
-                style = MaterialTheme.typography.bodySmall
-            )
+            OutlinedButton(onClick = onPickFile, enabled = state.busy == null) { Text("Choose file") }
+            Button(onClick = onInstall, enabled = ready && state.selectedIpa != null) { Text("Sign and install") }
         }
     }
 
@@ -190,17 +225,43 @@ fun InstallScreen(
         Panel("Progress") {
             val (label, fraction) = when (step) {
                 is SideloadStep.Preparing -> step.detail to null
+                is SideloadStep.Downloading -> "downloading" to step.percent / 100f
                 is SideloadStep.Account -> step.detail to null
                 is SideloadStep.Signing -> "signing ${step.bundle}" to null
                 is SideloadStep.Uploading -> "copying to the iPhone" to step.percent / 100f
-                is SideloadStep.Installing ->
-                    step.status.lowercase() to step.percent / 100f
-                is SideloadStep.Finished ->
-                    "installed, valid for ${step.expiresInDays} days" to 1f
+                is SideloadStep.Installing -> step.status.lowercase() to step.percent / 100f
+                is SideloadStep.HandOff -> step.detail to null
+                is SideloadStep.Finished -> "installed, valid for ${step.expiresInDays} days" to 1f
             }
             Text(label, style = MaterialTheme.typography.bodyMedium)
             if (fraction != null) {
                 LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+            } else if (state.busy != null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+
+    state.lastOutcome?.let { outcome ->
+        Panel("Finish on the iPhone") {
+            Text("${outcome.name} is installed as ${outcome.bundleId}, valid for ${outcome.expiresInDays} days.")
+            Text("1. Settings > General > VPN & Device Management: trust your Apple ID's developer app.")
+            Text("2. Settings > Privacy & Security > Developer Mode: turn it on and restart (iOS 16 and later).")
+            if (outcome.special.isSideStoreFamily) {
+                val where = if (outcome.special == SpecialApp.SIDESTORE_LIVECONTAINER) {
+                    "Open LiveContainer, then SideStore inside it"
+                } else {
+                    "Open SideStore"
+                }
+                Text("3. Install LocalDevVPN from the App Store and connect it.")
+                Text("4. $where and sign in with the same Apple ID.")
+                Text("5. Refresh in SideStore with LocalDevVPN connected, ideally every day, so nothing expires.")
+                if (!outcome.pairingHandedOff) {
+                    Text(
+                        "The pairing file could not be handed to SideStore; see Diagnostics.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }

@@ -46,8 +46,9 @@ class TcpTransport private constructor(private val socket: Socket) : Transport {
                 throw DeviceException(
                     operation = "connect to $host:$port",
                     reason = Log.describe(error),
-                    limitation = "a device only answers on the network once it has been " +
-                        "paired over USB and is on the same network"
+                    limitation = "the iPhone has to be awake, unlocked and on the same Wi-Fi " +
+                        "network; guest and public networks often keep devices apart",
+                    alternative = "check the address under Settings > Wi-Fi > (i) on the iPhone"
                 )
             }
             Log.i(LogTag.USBMUX, "connected to $host:$port")

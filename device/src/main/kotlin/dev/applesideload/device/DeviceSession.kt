@@ -2,6 +2,8 @@ package dev.applesideload.device
 
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
+import dev.applesideload.core.Plist
+import dev.applesideload.core.XmlPlist
 import java.io.Closeable
 
 /** Where the connection to the iPhone currently stands. */
@@ -154,7 +156,15 @@ class DeviceSession private constructor(
         }
     }
 
-    private fun startSession(record: PairingRecord): Boolean {
+    private fun startSession(stored: PairingRecord): Boolean {
+        // SideStore's minimuxer refuses a pairing file without WiFiMACAddress,
+        // so the device's own value is folded in once and kept.
+        var record = stored
+        if (record.wifiMacAddress.isNullOrBlank() && !info.wifiAddress.isNullOrBlank()) {
+            record = record.copy(wifiMacAddress = info.wifiAddress)
+            store.save(record)
+            this.record = record
+        }
         lockdown.startSession(record)
         state = ConnectionState.READY
         Log.i(
@@ -178,6 +188,42 @@ class DeviceSession private constructor(
 
     fun afc(): AfcClient = AfcClient(openService(AfcClient.SERVICE))
 
+    /** An installed app's container, over AFC. */
+    fun appContainer(bundleId: String, wholeContainer: Boolean): AfcClient =
+        HouseArrestClient.open(this, bundleId, wholeContainer)
+
+    /**
+     * The pairing record as AltStore-family apps read it.
+     *
+     * This is the classic lockdown record usbmuxd keeps, with the UDID, the
+     * host keys and the escrow bag, as an XML plist. SideStore's minimuxer
+     * uses it to reach lockdownd through LocalDevVPN, which is what lets it
+     * refresh apps on the iPhone by itself afterwards.
+     */
+    fun pairingFileForApps(): ByteArray {
+        val current = record ?: throw DeviceException(
+            operation = "preparing the pairing file",
+            reason = "the device is not paired"
+        )
+        return XmlPlist.write(current.toPlist(withPrivateKeys = true))
+    }
+
+    /**
+     * Lets lockdownd accept connections that do not come over USB.
+     *
+     * SideStore talks to lockdownd over the LocalDevVPN loopback, which
+     * lockdownd treats as a network connection, so this is set the way
+     * SideInstaller sets it.
+     */
+    fun enableWirelessLockdown() {
+        lockdown.setValue("EnableWifiDebugging", Plist.Bool(true), WIRELESS_LOCKDOWN)
+        Log.i(LogTag.LOCKDOWN, "wireless lockdown enabled")
+        // Also what lets this phone reach the iPhone over Wi-Fi later, the
+        // way Finder's "show this iPhone when on Wi-Fi" does.
+        runCatching { lockdown.setValue("EnableWifiConnections", Plist.Bool(true), WIRELESS_LOCKDOWN) }
+            .onFailure { Log.w(LogTag.LOCKDOWN, "could not enable Wi-Fi connections: ${it.message}") }
+    }
+
     fun installationProxy(): InstallationProxyClient = InstallationProxyClient(
         PlistService(openService(InstallationProxyClient.SERVICE), "installation_proxy")
     )
@@ -194,6 +240,7 @@ class DeviceSession private constructor(
 
     companion object {
         private const val POLL_MS = 1_000L
+        private const val WIRELESS_LOCKDOWN = "com.apple.mobile.wireless_lockdown"
 
         /**
          * Opens lockdown over [channel] and reads the device's own account of

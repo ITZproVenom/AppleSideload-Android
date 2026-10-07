@@ -137,6 +137,9 @@ object IpaPackage {
         if (from == to && displayName == null) return
         bundle.walkTopDown()
             .filter { it.isFile && it.name == "Info.plist" }
+            // Frameworks keep their own identifiers, as isideload leaves them;
+            // SideStore inside LiveContainer must stay com.SideStore.SideStore.
+            .filterNot { it.relativeTo(bundle).path.contains(".framework/") }
             .forEach { file ->
                 val plist = runCatching { PlistReader.parse(file.readBytes()) }.getOrNull()
                     ?: return@forEach
@@ -157,6 +160,30 @@ object IpaPackage {
                 if (changed) file.writeBytes(XmlPlist.write(Plist.Dict(updated)))
             }
         Log.i(LogTag.SIGN, "rewrote the bundle identifier for this account")
+    }
+
+    /** Every app extension inside [bundle], nested ones included. */
+    fun extensions(bundle: File): List<File> =
+        bundle.walkTopDown()
+            .filter { it.isDirectory && it.name.endsWith(".appex") && File(it, "Info.plist").exists() }
+            .toList()
+
+    /** The frameworks directly inside [bundle]. */
+    fun frameworks(bundle: File): List<File> =
+        File(bundle, "Frameworks").listFiles()
+            ?.filter { it.isDirectory && it.name.endsWith(".framework") }
+            .orEmpty()
+
+    /** A bundle's Info.plist as a dictionary. */
+    fun readInfo(bundle: File): Map<String, Plist> =
+        PlistReader.parse(File(bundle, "Info.plist").readBytes()).asDict.orEmpty()
+
+    /** Rewrites a bundle's Info.plist; signing must come after. */
+    fun editInfo(bundle: File, edit: (MutableMap<String, Plist>) -> Unit) {
+        val file = File(bundle, "Info.plist")
+        val updated = LinkedHashMap(readInfo(bundle))
+        edit(updated)
+        file.writeBytes(XmlPlist.write(Plist.Dict(updated)))
     }
 
     /** Packs the signed bundle back into an IPA. */

@@ -32,6 +32,11 @@ class Settings(context: Context) {
         get() = preferences.getString(KEY_APPLE_ID, "") ?: ""
         set(value) = preferences.edit().putString(KEY_APPLE_ID, value).apply()
 
+    /** The iPhone address last used in wireless mode. */
+    var lastWirelessAddress: String
+        get() = preferences.getString(KEY_WIRELESS, "") ?: ""
+        set(value) = preferences.edit().putString(KEY_WIRELESS, value).apply()
+
     /** Stable identifier sent with anisette requests for this install. */
     val deviceId: String
         get() = preferences.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString()
@@ -42,6 +47,7 @@ class Settings(context: Context) {
         const val KEY_WIFI = "wifi_discovery"
         const val KEY_APPLE_ID = "apple_id"
         const val KEY_DEVICE_ID = "device_id"
+        const val KEY_WIRELESS = "wireless_address"
     }
 }
 
