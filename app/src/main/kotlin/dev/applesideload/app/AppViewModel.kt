@@ -25,6 +25,7 @@ import dev.applesideload.device.DeviceSession
 import dev.applesideload.device.DiscoveredDevice
 import dev.applesideload.device.InstalledApp
 import dev.applesideload.device.UsbChannel
+import dev.applesideload.device.TcpTransport
 import dev.applesideload.device.WifiChannel
 import dev.applesideload.sideload.InstallOutcome
 import dev.applesideload.sideload.InstallSource
@@ -131,7 +132,24 @@ class AppViewModel(application: SideloadApplication) : AndroidViewModel(applicat
             is DiscoveredDevice.Wifi -> WifiChannel(target.host.hostAddress ?: target.host.toString())
         }
 
-        val opened = DeviceSession.open(channel, app.pairingStore)
+        val opened = try {
+            DeviceSession.open(channel, app.pairingStore)
+        } catch (error: java.io.IOException) {
+            // A reset or an immediate close at the first request is how iOS 27
+            // turns away lockdown over Wi-Fi, before any Trust prompt.
+            if (target is DiscoveredDevice.Wifi) {
+                throw DeviceException(
+                    operation = "connecting wirelessly",
+                    reason = "the iPhone closed the lockdown connection at the first request",
+                    limitation = "newer iOS versions (iOS 27) no longer let lockdownd pair over Wi-Fi; " +
+                        "they only pair wirelessly through Remote Pairing, which this app does not " +
+                        "implement yet",
+                    alternative = "pair once over a USB cable; after that wireless mode works",
+                    cause = error
+                )
+            }
+            throw error
+        }
         session = opened
         _state.value = _state.value.copy(
             connection = ConnectionState.LOCKDOWN_CONNECTED,
@@ -156,6 +174,26 @@ class AppViewModel(application: SideloadApplication) : AndroidViewModel(applicat
             device = opened.info
         )
         loadApps()
+    }
+
+    /**
+     * Wireless mode: connects to an iPhone by its Wi-Fi address, no cable.
+     *
+     * lockdownd on the iPhone listens on the network as well, and as
+     * SideInstaller's Side by Side does, pairing runs straight against
+     * <address>:62078 - the iPhone shows the Trust prompt and everything after
+     * that, signing and installing included, goes over Wi-Fi.
+     */
+    fun connectWireless(address: String) {
+        val trimmed = address.trim()
+        if (!Regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$").matches(trimmed)) {
+            _state.value = _state.value.copy(
+                error = "Enter the iPhone's IPv4 address, for example 192.168.1.23. It is under Settings > Wi-Fi > (i) on the iPhone."
+            )
+            return
+        }
+        app.settings.lastWirelessAddress = trimmed
+        connect(DiscoveredDevice.Wifi(trimmed, java.net.InetAddress.getByName(trimmed), TcpTransport.LOCKDOWN_PORT))
     }
 
     fun disconnect() {

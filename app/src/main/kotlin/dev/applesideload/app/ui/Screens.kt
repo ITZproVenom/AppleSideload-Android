@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -56,8 +57,10 @@ private fun Screen(content: @Composable () -> Unit) {
 @Composable
 fun HomeScreen(
     state: UiState,
+    lastWirelessAddress: String,
     onRefresh: () -> Unit,
     onConnect: (DiscoveredDevice) -> Unit,
+    onConnectWireless: (String) -> Unit,
     onDisconnect: () -> Unit
 ) = Screen {
     Panel("Connection") {
@@ -81,7 +84,7 @@ fun HomeScreen(
         if (state.discovered.isEmpty()) {
             Text(
                 "No iPhone found. Connect one with a USB cable and allow access when " +
-                    "Android asks, or enable Wi-Fi sync on a device already paired with this app.",
+                    "Android asks, or use wireless mode below.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -97,10 +100,32 @@ fun HomeScreen(
         }
     }
 
+    Panel("Wireless mode (no cable)") {
+        var address by rememberSaveable { mutableStateOf(lastWirelessAddress) }
+        Text(
+            "Put both phones on the same Wi-Fi network, unlock the iPhone, and enter its address " +
+                "from Settings > Wi-Fi > (i). The iPhone asks to Trust this phone; after that, " +
+                "installs go over Wi-Fi.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedTextField(
+            value = address,
+            onValueChange = { address = it },
+            label = { Text("iPhone IP address") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = { onConnectWireless(address) },
+            enabled = state.busy == null && address.isNotBlank()
+        ) { Text("Connect wirelessly") }
+    }
+
     Panel("What this does") {
         Text(
             "Signs an iOS app with your own Apple account and installs it on your iPhone " +
-                "over the cable. Nothing is sent to a PC or a Mac. A free account gives a " +
+                "over the cable or Wi-Fi. Nothing is sent to a PC or a Mac. A free account gives a " +
                 "seven day signature, three installed apps at a time, and ten new app " +
                 "identifiers a week; those are Apple's limits, not this app's.",
             style = MaterialTheme.typography.bodyMedium

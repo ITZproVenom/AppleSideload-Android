@@ -132,8 +132,10 @@ class MainActivity : ComponentActivity() {
                             when (destination) {
                                 Destination.HOME -> HomeScreen(
                                     state = state,
+                                    lastWirelessAddress = settings.lastWirelessAddress,
                                     onRefresh = viewModel::refreshDevices,
                                     onConnect = viewModel::connect,
+                                    onConnectWireless = viewModel::connectWireless,
                                     onDisconnect = viewModel::disconnect
                                 )
 
