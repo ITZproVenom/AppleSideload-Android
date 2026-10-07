@@ -356,6 +356,7 @@ class AppController(private val app: SideloadApplication) : Controls {
         } else {
             // Whatever this phone already holds for the iPhone, for SideStore.
             opened.remotePairing = app.pairingStore.loadRemote(opened.info.udid)
+            opened.startHeartbeat()
         }
         set { it.copy(connection = opened.state, pairingHint = null, device = opened.info) }
         readApps()
@@ -754,6 +755,7 @@ class AppController(private val app: SideloadApplication) : Controls {
         )
         created.remotePairing = record
         created.establish()
+        created.startHeartbeat()
         adopt(created, null)
         runCatching { app.pairingStore.saveRemote(record, host) }
             .onFailure { Log.w(LogTag.PAIR, "could not update the Remote Pairing record: ${it.message}") }

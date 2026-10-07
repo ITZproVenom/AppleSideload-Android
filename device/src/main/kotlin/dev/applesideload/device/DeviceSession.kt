@@ -308,8 +308,33 @@ class DeviceSession private constructor(
         PlistService(openService(MisagentClient.SERVICE), "misagent", sendBinary = false)
     )
 
+    @Volatile
+    private var heartbeat: Heartbeat? = null
+
+    /**
+     * Answers the iPhone's heartbeat for as long as this session is open,
+     * over Wi-Fi and through the tunnel: without it iOS closes the service
+     * connections of a host it hears nothing from. Over the cable usbmuxd
+     * does this, so it is not needed there. Never fatal: if the service will
+     * not start, the session goes on without it and says so in the log.
+     */
+    fun startHeartbeat() {
+        if (channel is UsbChannel || heartbeat != null) return
+        heartbeat = try {
+            Heartbeat.start(PlistService(openService(Heartbeat.SERVICE), "heartbeat", sendBinary = false), info.name)
+        } catch (error: Exception) {
+            Log.w(
+                LogTag.LOCKDOWN,
+                "the heartbeat service did not start (${Log.describe(error)}); the iPhone may close a long " +
+                    "Wi-Fi session"
+            )
+            null
+        }
+    }
+
     override fun close() {
         state = ConnectionState.DISCONNECTED
+        runCatching { heartbeat?.close() }
         runCatching { lockdown.close() }
         runCatching { channel.close() }
     }
