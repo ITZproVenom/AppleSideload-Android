@@ -27,6 +27,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -273,7 +274,7 @@ class WebApiTest {
     @Test
     fun aTruncatedUploadIsDiscarded() {
         Socket("127.0.0.1", port).use { socket ->
-            val head = "POST /api/ipa HTTP/1.1\r\nHost: x\r\n" +
+            val head = "POST /api/ipa HTTP/1.1\r\nHost: 127.0.0.1:$port\r\n" +
                 "Content-Type: application/octet-stream\r\nContent-Length: 1000\r\n\r\n"
             socket.getOutputStream().write(head.toByteArray() + ByteArray(400))
             socket.shutdownOutput()
@@ -295,14 +296,54 @@ class WebApiTest {
         assertEquals("line 4", next.getJSONArray("lines").getJSONObject(0).getString("message"))
     }
 
+    private fun raw(text: String): String = Socket("127.0.0.1", port).use { socket ->
+        socket.soTimeout = 5000
+        socket.getOutputStream().write(text.toByteArray())
+        socket.shutdownOutput()
+        String(socket.getInputStream().readBytes())
+    }
+
+    @Test
+    fun otherWebsitesAndOtherNamesAreRefused() {
+        // DNS rebinding: a website's own name pointed at the phone.
+        assertTrue(raw("GET /api/state HTTP/1.1\r\nHost: attacker.example:$port\r\n\r\n").startsWith("HTTP/1.1 403"))
+        assertTrue(raw("GET / HTTP/1.1\r\n\r\n").startsWith("HTTP/1.1 403"))
+        // Another website posting from a browser on the same network.
+        val forged = raw(
+            "POST /api/disconnect HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nOrigin: http://attacker.example\r\n" +
+                "Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}"
+        )
+        assertTrue(forged, forged.startsWith("HTTP/1.1 403"))
+        assertTrue(controls.calls.isEmpty())
+        // The controller's own page.
+        val own = raw(
+            "POST /api/disconnect HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nOrigin: http://127.0.0.1:$port\r\n" +
+                "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+        )
+        assertTrue(own, own.startsWith("HTTP/1.1 200"))
+        assertEquals(listOf("disconnect"), controls.calls)
+    }
+
+    @Test
+    fun devicesOutsideThePhonesNetworkAreRefused() {
+        val outside = WebApi(
+            controls = controls,
+            asset = { "<html>ok</html>".toByteArray() },
+            onMain = object : WebApi.MainThread {
+                override fun <T> call(block: () -> T): T = block()
+            },
+            newUploadFile = { File(folder.root, "outside.ipa") },
+            isLocal = { _, _ -> false }
+        )
+        val request = HttpRequest(
+            "GET", "/", emptyMap(), mapOf("host" to "192.168.1.50:8686"), 0,
+            ByteArrayInputStream(ByteArray(0)), InetAddress.getByName("203.0.113.9")
+        )
+        assertEquals(403, outside.handle(request).status)
+    }
+
     @Test
     fun malformedRequestsGetAnAnswerNotAHang() {
-        fun raw(text: String): String = Socket("127.0.0.1", port).use { socket ->
-            socket.soTimeout = 5000
-            socket.getOutputStream().write(text.toByteArray())
-            socket.shutdownOutput()
-            String(socket.getInputStream().readBytes())
-        }
         assertTrue(raw("NONSENSE\r\n\r\n").startsWith("HTTP/1.1 400"))
         assertTrue(raw("POST /api/connect HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").startsWith("HTTP/1.1 411"))
         assertTrue(raw("GET / HTTP/1.1\r\nX: ${"a".repeat(20_000)}\r\n\r\n").startsWith("HTTP/1.1 431"))

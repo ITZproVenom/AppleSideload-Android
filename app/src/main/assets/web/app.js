@@ -151,7 +151,7 @@
         dyn.found),
       dyn.remote,
       h("div", { class: "card" },
-        h("h2", { text: "Wireless mode (no cable)" }),
+        h("h2", { text: "Connect by IP address" }),
         h("p", { class: "muted", text: "Enter the iPhone's address from Settings > Wi-Fi > (i) on the iPhone. It must be on the same network as the Android phone. An iPhone paired wirelessly (above) is reached through its encrypted tunnel; any other one asks to Trust this phone the first time, which iOS 27 no longer allows over Wi-Fi." }),
         h("div", { class: "row" }, h("div", { class: "grow" }, wirelessInput), actionButton("Connect", connectWireless, "primary"))),
       dyn.info);
@@ -167,10 +167,10 @@
     const p = s.remotePairing;
     const offering = p && (p.stage === "STARTING" || p.stage === "ADVERTISING" || p.stage === "PIN");
     fill(dyn.remote,
-      h("div", { class: "row spread" }, h("h2", { text: "Wireless pairing (iOS 17 and later)" }),
+      h("div", { class: "row spread" }, h("h2", { text: "Pair wirelessly (iOS 17 and later)" }),
         p ? h("button", { text: offering ? "Stop" : "Close", onclick: () => act("/api/remote/stop") })
           : h("button", { class: "primary", text: "Pair wirelessly", onclick: () => act("/api/remote/start") })),
-      h("p", { class: "muted", text: "Pairs the iPhone with this phone with no cable, the way iOS 27 requires. Tap Pair wirelessly, then on the iPhone open Settings > Privacy & Security > Developer Mode, pick this phone and type the PIN shown here. If Developer Mode is not listed, connect the iPhone once with a USB cable instead: that sets up wireless access by itself." }),
+      h("p", { class: "muted", text: "Pairs the iPhone with this phone over Wi-Fi, which iOS 27 requires for wireless use. Tap Pair wirelessly, then on the iPhone open Settings > Privacy & Security > Developer Mode, pick this phone and type the PIN shown here. If Developer Mode is not listed, connect the iPhone once with a USB cable instead: that sets up wireless access by itself." }),
       p ? h("div", { class: "pairing" },
         field("Status", PAIR_STAGE[p.stage] || p.stage),
         field("This phone", p.hostName),
@@ -233,7 +233,7 @@
     dyn.outcome = h("div", { class: "card", hidden: true });
     v.append(dyn.before,
       h("div", { class: "card" }, h("h2", { text: "SideStore + LiveContainer" }),
-        h("p", { class: "muted", text: "Downloads the latest official release, signs it with your Apple ID, installs it, and gives SideStore the pairing file so it can refresh itself and your apps on the iPhone with LocalDevVPN — the same setup SideInstaller makes." }),
+        h("p", { class: "muted", text: "Downloads the latest official release (on iOS 27 and later the newest build, nightly included, since only those can refresh there), signs it with your Apple ID, installs it, and gives SideStore the pairing file so it can refresh itself and your apps on the iPhone with LocalDevVPN — the same setup SideInstaller makes." }),
         dyn.sources),
       h("div", { class: "card" }, h("h2", { text: "Custom IPA" }),
         h("p", { class: "muted", text: "Upload an .ipa from this computer to the phone, check it, then sign and install it." }),
@@ -314,7 +314,8 @@
       fill(dyn.outcome, h("h2", { text: "Finish on the iPhone" }),
         h("p", { text: o.name + " is installed as " + o.bundleId + ", valid for " + o.expiresInDays + " days." }),
         h("ol", {}, ...steps.map((t) => h("li", { text: t }))),
-        o.sideStoreFamily && !o.pairingHandedOff ? h("p", { class: "error", text: "The pairing file could not be handed to SideStore; see Logs." }) : null);
+        o.sideStoreFamily && !o.pairingHandedOff ? h("p", { class: "error", text: "The pairing file could not be handed to SideStore; see Logs." }) : null,
+        o.warning ? h("p", { class: "hint", text: o.warning }) : null);
     }
   }
 

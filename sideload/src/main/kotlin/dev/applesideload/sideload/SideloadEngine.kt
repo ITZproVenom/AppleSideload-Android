@@ -42,8 +42,17 @@ data class InstallOutcome(
     val bundleId: String,
     val expiresInDays: Int,
     val special: SpecialApp,
-    val pairingHandedOff: Boolean
+    val pairingHandedOff: Boolean,
+    /** Something the user must know about what was installed, such as a build too old for the iPhone. */
+    val warning: String? = null
 )
+
+/**
+ * From this iOS version lockdownd resets connections that come through
+ * LocalDevVPN (SideStore issue 1532), so SideStore can refresh only with a
+ * Remote Pairing file, which only its newest builds read.
+ */
+const val REMOTE_PAIRING_ONLY_FROM_IOS = 27
 
 /**
  * The whole install, from an IPA on the phone to an app on the iPhone.
@@ -434,7 +443,7 @@ class SideloadEngine(
          * with a complete record (SideStore issue 1532), so SideStore is
          * pointed at the Remote Pairing record there.
          */
-        const val LOCKDOWN_OVER_VPN_BLOCKED_FROM = 27
+        const val LOCKDOWN_OVER_VPN_BLOCKED_FROM = REMOTE_PAIRING_ONLY_FROM_IOS
 
         val REQUIRED_PAIRING_KEYS = listOf(
             "WiFiMACAddress", "SystemBUID", "RootPrivateKey", "HostPrivateKey", "HostID",

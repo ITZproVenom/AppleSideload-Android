@@ -46,6 +46,7 @@ android {
     buildFeatures { compose = true }
     sourceSets["main"].java.srcDir("src/main/kotlin")
     sourceSets["test"].java.srcDir("src/test/kotlin")
+    sourceSets["testDebug"].java.srcDir("src/testDebug/kotlin")
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -60,6 +61,14 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // The screenshot tests (src/testDebug) draw the screens with
+        // Robolectric, which needs the app's resources, and Roborazzi saves
+        // each one as a PNG under build/screenshots for CI to keep.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.systemProperty("roborazzi.test.record", "true")
+            it.maxHeapSize = "2g"
+        }
     }
     lint {
         abortOnError = true
@@ -91,6 +100,14 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
+    // Screenshot tests only: the activity the Compose test rule starts. It is
+    // in debug builds alone and never in the release APK.
+    debugImplementation(libs.compose.ui.test.manifest)
+    testDebugImplementation(composeBom)
+    testDebugImplementation(libs.compose.ui.test.junit4)
+    testDebugImplementation(libs.robolectric)
+    testDebugImplementation(libs.roborazzi)
+    testDebugImplementation(libs.roborazzi.compose)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)

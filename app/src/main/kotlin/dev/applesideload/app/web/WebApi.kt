@@ -7,13 +7,15 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
 
 /**
  * The web controller's routes: the page itself and a JSON API covering
  * everything the app's screens can do.
  *
  * The controller is meant for the user's own local network and has no
- * login: whoever can open the page can use it. Actions answer at once - 202 when the operation was started, 409
+ * login: whoever on that network can open the page can use it, which is
+ * why [refusal] turns away everyone else. Actions answer at once - 202 when the operation was started, 409
  * with the reason when it was refused, for example because another
  * operation is still running - and the page follows progress through
  * /api/state, exactly as the phone's screens follow the same state.
@@ -26,7 +28,9 @@ class WebApi(
     private val onMain: MainThread,
     /** A fresh file to receive an uploaded IPA. */
     private val newUploadFile: () -> File,
-    private val maxUploadBytes: Long = MAX_UPLOAD_BYTES
+    private val maxUploadBytes: Long = MAX_UPLOAD_BYTES,
+    /** Whether a client (first) that reached this phone at its address (second) is on the phone's network. */
+    private val isLocal: (InetAddress, InetAddress?) -> Boolean = LocalNetwork::accepts
 ) {
 
     interface MainThread {
@@ -34,6 +38,7 @@ class WebApi(
     }
 
     fun handle(request: HttpRequest): HttpResponse {
+        refusal(request)?.let { return it }
         if (!request.path.startsWith("/api/")) return page(request)
         return when (request.method to request.path) {
             "GET" to "/api/state" -> state()
@@ -102,6 +107,36 @@ class WebApi(
                 json(404, JSONObject().put("ok", false).put("error", "No such API: ${request.path}"))
             }
         }
+    }
+
+    /**
+     * Who the controller will not answer, since it has no login.
+     *
+     * - Devices outside this phone's network, and anything over mobile data.
+     * - Requests addressed to a name rather than to the phone's address (an
+     *   IP or localhost). This stops DNS rebinding, where a website points
+     *   its own name at this phone to read the controller through the
+     *   browser of someone on the network.
+     * - Requests that change something and say they come from another
+     *   website (the Origin header). Without this, any page open in a
+     *   browser on the network could quietly send commands here.
+     */
+    private fun refusal(request: HttpRequest): HttpResponse? {
+        val remote = request.remote
+        if (remote == null || !isLocal(remote, request.local)) {
+            return HttpResponse.text(403, "Only devices on the same local network as the phone can use the web controller.")
+        }
+        val host = request.header("host")?.trim().orEmpty()
+        if (!isDirectHost(host)) {
+            return HttpResponse.text(403, "Open the web controller at the address the app shows in Settings, such as http://192.168.1.20:8686.")
+        }
+        if (request.method != "GET" && request.method != "HEAD") {
+            val origin = request.header("origin")?.trim()
+            if (origin != null && !origin.equals("http://$host", ignoreCase = true)) {
+                return json(403, JSONObject().put("ok", false).put("error", "Requests from other websites are refused."))
+            }
+        }
+        return null
     }
 
     // MARK: - Routes
@@ -248,5 +283,31 @@ class WebApi(
             "/api/team", "/api/signout", "/api/revoke", "/api/install-source", "/api/install",
             "/api/ipa", "/api/settings"
         )
+
+        private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
+        private val PORT = Regex("""\d{1,5}""")
+
+        /** A Host header naming this phone by address: an IPv4 or [IPv6] literal, or localhost, with an optional port. */
+        fun isDirectHost(host: String): Boolean {
+            val name: String
+            val port: String?
+            if (host.startsWith("[")) {
+                val end = host.indexOf(']')
+                if (end < 0) return false
+                name = host.substring(1, end)
+                val after = host.substring(end + 1)
+                port = when {
+                    after.isEmpty() -> null
+                    after.startsWith(":") -> after.substring(1)
+                    else -> return false
+                }
+                if (!name.contains(':')) return false
+            } else {
+                name = host.substringBefore(':')
+                port = if (host.contains(':')) host.substringAfter(':') else null
+                if (name.lowercase() != "localhost" && !IPV4.matches(name)) return false
+            }
+            return port == null || PORT.matches(port)
+        }
     }
 }

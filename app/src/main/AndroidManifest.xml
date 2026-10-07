@@ -27,6 +27,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.AppleSideload">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -41,13 +42,19 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/usb_device_filter" />
 
-            <!-- Opening an IPA from Files or a browser download. -->
+            <!-- Opening an IPA from Files or a browser download. Android has no
+                 type for .ipa, so one arrives as a generic binary or a zip (which
+                 it is); a path pattern cannot narrow it, as content URIs carry no
+                 file name. The file is checked before anything uses it. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.ipa" />
-                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.ipa" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-itunes-ipa" />
+                <data android:mimeType="application/x-ios-app" />
+                <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
 

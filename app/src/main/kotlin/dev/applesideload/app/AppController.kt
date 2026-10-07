@@ -37,7 +37,9 @@ import dev.applesideload.device.remote.RemoteTunnel
 import dev.applesideload.device.remote.RpPairingFile
 import dev.applesideload.sideload.InstallOutcome
 import dev.applesideload.sideload.InstallSource
+import dev.applesideload.sideload.REMOTE_PAIRING_ONLY_FROM_IOS
 import dev.applesideload.sideload.ReleaseDownloader
+import dev.applesideload.sideload.SideStoreFeatures
 import dev.applesideload.sideload.SideloadEngine
 import dev.applesideload.sideload.SideloadStep
 import dev.applesideload.signing.IpaInfo
@@ -340,7 +342,12 @@ class AppController(private val app: SideloadApplication) : Controls {
             // A session that never paired is no use; drop it so the screens do
             // not keep showing "waiting for Trust" and a retry starts clean.
             runCatching { opened.close() }
-            release(opened)
+            if (!release(opened)) {
+                // Disconnect (Cancel, on the phone or the web page) took the
+                // session away while it waited for Trust: stopped, not failed.
+                Log.i(LogTag.APP, "stopped waiting for the iPhone to trust this phone")
+                return
+            }
             set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
             throw error
         }
@@ -988,12 +995,33 @@ class AppController(private val app: SideloadApplication) : Controls {
         if (source == InstallSource.CUSTOM) return install()
         return run("Installing ${source.title}") {
             val (device, account, team) = requireReady("installing ${source.title}")
-            set { it.copy(step = SideloadStep.Preparing("finding the latest ${source.title}"), lastOutcome = null) }
+            // Only SideStore's newest builds can refresh on iOS 27, so there
+            // nightly builds count too.
+            val ios = device.info.majorVersion
+            val newest = ios >= REMOTE_PAIRING_ONLY_FROM_IOS
+            set {
+                it.copy(
+                    step = SideloadStep.Preparing(
+                        if (newest) "finding the newest ${source.title}, nightly builds included" else "finding the latest ${source.title}"
+                    ),
+                    lastOutcome = null
+                )
+            }
             val downloader = ReleaseDownloader(File(app.filesDir, "downloads"))
-            val build = downloader.latest(source)
-            Log.i(LogTag.APP, "${source.title} ${build.tag} is the latest release")
+            val build = downloader.latest(source, includeNightly = newest)
+            Log.i(LogTag.APP, "${source.title} ${build.label} is the ${if (newest) "newest build" else "latest release"}")
             val ipa = downloader.download(build) { percent -> set { it.copy(step = SideloadStep.Downloading(percent)) } }
-            finishInstall(engine().install(ipa, source, device, account, team, ::onStep), "${source.title} ${build.tag}")
+            val warning = if (newest && !SideStoreFeatures.supportsRemotePairing(ipa)) {
+                "This ${source.title} build (${build.label}) is older than SideStore's iOS $ios support, so " +
+                    "SideStore cannot refresh on the iPhone with it yet. Install it again from this app " +
+                    "before the 7 days run out" +
+                    (if (source == InstallSource.SIDESTORE_LIVECONTAINER) ", or install SideStore only, whose newest build has that support." else ".")
+            } else {
+                null
+            }
+            warning?.let { Log.w(LogTag.APP, it) }
+            val outcome = engine().install(ipa, source, device, account, team, ::onStep)
+            finishInstall(outcome.copy(warning = warning), "${source.title} ${build.label}")
         }
     }
 

@@ -44,9 +44,12 @@ class WebControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // Turned off by the user, in Settings or from the notification: it stays off.
+            app.settings.webEnabled = false
             shutdown()
             return START_NOT_STICKY
         }
+        app.settings.webEnabled = true
         try {
             startInForeground(buildNotification())
         } catch (error: RuntimeException) {
@@ -154,7 +157,7 @@ class WebControlService : Service() {
         }
         val text = where
         return builder
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Web controller is running")
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(
@@ -175,10 +178,17 @@ class WebControlService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, WebControlService::class.java).setAction(ACTION_START)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (error: RuntimeException) {
+                // Android refuses to start it while the app is in the background;
+                // say so in Settings instead of crashing.
+                (context.applicationContext as SideloadApplication).webControl
+                    .reportError("Android did not allow the web controller to start: ${error.message}")
             }
         }
 

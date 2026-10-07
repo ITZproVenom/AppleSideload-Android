@@ -28,9 +28,10 @@ data class WebStatus(
  * Owns the LAN web controller: the server and where it can be reached.
  *
  * The server listens on every interface, so the page opens over Wi-Fi, over
- * the phone's hotspot and over USB or Ethernet tethering alike. It is only
- * ever started by the user, from Settings, and runs inside
- * [WebControlService] so Android keeps it alive in the background.
+ * the phone's hotspot and over USB or Ethernet tethering alike. It starts
+ * with the app until the user turns it off (in Settings or from its
+ * notification), and runs inside [WebControlService] so Android keeps it
+ * alive in the background. [WebApi] answers only this phone's network.
  */
 class WebControl(private val app: SideloadApplication) {
 
@@ -38,6 +39,7 @@ class WebControl(private val app: SideloadApplication) {
     val status: StateFlow<WebStatus> = _status.asStateFlow()
 
     private var server: HttpServer? = null
+    private var autoStartChecked = false
 
     private val mainThread = object : WebApi.MainThread {
         override fun <T> call(block: () -> T): T =
@@ -71,6 +73,17 @@ class WebControl(private val app: SideloadApplication) {
             _status.update { it.copy(running = false, error = reason) }
             false
         }
+    }
+
+    /**
+     * True once per process when the controller should start with the app:
+     * it is on by default, and stays off once the user turns it off.
+     */
+    @Synchronized
+    fun takeAutoStart(): Boolean {
+        if (autoStartChecked) return false
+        autoStartChecked = true
+        return app.settings.webEnabled && server == null
     }
 
     @Synchronized

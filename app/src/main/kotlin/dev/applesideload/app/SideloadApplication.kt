@@ -43,6 +43,16 @@ class Settings(context: Context) {
         get() = preferences.getInt(KEY_WEB_PORT, WebControl.DEFAULT_PORT)
         set(value) = preferences.edit().putInt(KEY_WEB_PORT, value).apply()
 
+    /** Whether the web controller starts with the app: on until the user turns it off. */
+    var webEnabled: Boolean
+        get() = preferences.getBoolean(KEY_WEB_ENABLED, true)
+        set(value) = preferences.edit().putBoolean(KEY_WEB_ENABLED, value).apply()
+
+    /** Whether starting the controller by itself has already asked for the notification permission. */
+    var askedForNotifications: Boolean
+        get() = preferences.getBoolean(KEY_ASKED_NOTIFICATIONS, false)
+        set(value) = preferences.edit().putBoolean(KEY_ASKED_NOTIFICATIONS, value).apply()
+
     /** Stable identifier sent with anisette requests for this install. */
     val deviceId: String
         get() = preferences.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString()
@@ -55,6 +65,8 @@ class Settings(context: Context) {
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_WIRELESS = "wireless_address"
         const val KEY_WEB_PORT = "web_port"
+        const val KEY_WEB_ENABLED = "web_enabled"
+        const val KEY_ASKED_NOTIFICATIONS = "asked_notifications"
     }
 }
 

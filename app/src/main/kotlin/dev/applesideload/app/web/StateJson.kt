@@ -113,6 +113,7 @@ object StateJson {
                 put("special", outcome.special.name)
                 put("sideStoreFamily", outcome.special.isSideStoreFamily)
                 put("pairingHandedOff", outcome.pairingHandedOff)
+                put("warning", outcome.warning.orNull())
             }
         }.orNull())
         put("anisetteServers", JSONArray().apply {
