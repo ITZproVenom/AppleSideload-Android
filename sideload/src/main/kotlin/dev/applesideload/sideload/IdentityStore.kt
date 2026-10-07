@@ -44,8 +44,13 @@ class IdentityStore(context: Context) {
 
     fun loadPendingKey(): ByteArray? = read("pending.key")
 
+    /** The machine id the certificate was requested with, used as SideStore's p12 password. */
+    fun saveMachineId(machineId: String) = write("signing.mid", machineId.toByteArray())
+
+    fun loadMachineId(): String? = read("signing.mid")?.let { String(it) }
+
     fun clearSigningIdentity() {
-        listOf("signing.key", "signing.cer", "pending.key").forEach {
+        listOf("signing.key", "signing.cer", "pending.key", "signing.mid").forEach {
             File(directory, it).delete()
         }
     }

@@ -17,18 +17,32 @@ SideStore and LiveContainer IPAs are supported, including their app groups and n
 
 - **Anisette attestation.** Apple sign-in needs `X-Apple-I-MD` headers that only Apple's closed ADI code can produce. Like SideStore and SideInstaller, the app gets them by default from the public SideStore anisette server (`https://ani.sidestore.io`), using the live server list with a bundled fallback. You can enter your own server in Settings. Your Apple ID password is **never** sent to the anisette server; it goes only to Apple through SRP. On-device ADI isn't compiled in, and the app says so instead of pretending it works.
 - **Free Apple ID limits** (Apple's rules): apps expire after 7 days, at most 3 sideloaded apps at once, 10 App IDs per 7 days, and the free development certificates are limited. If Apple already holds a certificate whose private key is on another machine, the app explains this and offers to revoke it.
-- **iOS 17+**: install, AFC and pairing all work through lockdown over USB. Developer-disk and debug services that need the RemoteXPC/RSD tunnel are not implemented, and the Device screen says so.
+- **iOS 17+**: install, AFC and pairing all work through lockdown. The first pairing needs the USB cable: wireless-only pairing (RemoteXPC / RPPairing) is not implemented. Developer-disk and debug services that need the RSD tunnel are not implemented either.
 - **Untested on hardware so far.** Every failure surfaces the operation, the iOS version, the technical reason, the limitation and whether a legitimate alternative exists. Copy the Diagnostics log when you report a problem.
 
 No enterprise certificates, no manual `.p12` or `.mobileprovision` files, and no Developer Mode requirement.
 
 ## Using it
 
-1. Connect the iPhone to the Android phone with a USB-C (or OTG + Lightning) cable and allow USB access.
-2. **Device**: connect, then pair and tap *Trust* on the iPhone.
-3. **Account**: sign in with your Apple ID and pick a team.
-4. **Install**: choose an `.ipa` and install.
-5. **Apps**: view and remove sideloaded apps. **Diagnostics**: tagged logs (`[USB] [USBMUX] [LOCKDOWN] [PAIR] [APPLE] [SIGN] [INSTALL]`), redacted when exported.
+The Android app only does the installing. As with SideInstaller, refreshing happens on the iPhone: SideStore re-signs itself, LiveContainer and your apps every day over LocalDevVPN, so you don't need this phone after setup.
+
+1. Connect the iPhone to the Android phone with a cable and allow USB access. You only need the cable to pair the first time. After that, wireless mode lets the iPhone be found and installed to over the same Wi-Fi.
+2. **Device**: connect, then tap *Trust* on the iPhone with it unlocked.
+3. **Account**: sign in with your Apple ID (two-factor is supported).
+4. **Install**: pick one of two options:
+   - **SideStore + LiveContainer**: downloads the latest `LiveContainer+SideStore.ipa` from LiveContainer's GitHub releases (*SideStore only* is offered as well), or
+   - **Custom IPA**: any `.ipa` from the phone.
+5. On the iPhone: trust the developer app (Settings > General > VPN & Device Management), turn on Developer Mode (Settings > Privacy & Security), install and connect **LocalDevVPN**, open SideStore, sign in with the same Apple ID, and refresh every day.
+
+### What the install does for SideStore (from SideInstaller and isideload)
+
+- Bundle IDs become `<original>.<TEAMID>`; every extension gets its own App ID; all of them share one app group (`group.com.SideStore.SideStore.<TEAMID>` for the LiveContainer build).
+- `ALTAppGroups`, `ALTCertificateID` and `ALTCertificate.p12` (protected with the certificate's machine id) are written into SideStore's bundle, so SideStore signs with the same certificate.
+- LiveContainer gets its `com.kdt.livecontainer.shared` keychain groups.
+- After installing, the lockdown pairing file is written into SideStore's container through house_arrest: `ALTPairingFile.mobiledevicepairing`, plus `PairingFile_Lockdown.plist` with `isPairingReset = false` and `activePairingProtocol = lockdown` for newer nightlies. Wireless lockdown (`EnableWifiDebugging`) is switched on, so SideStore can reach lockdownd over LocalDevVPN.
+- `Account.sideconf` is not written: it needs a provisioned anisette v3 state that the V1 anisette servers don't give. SideStore asks you to sign in on first launch instead.
+
+**Diagnostics** shows the tagged logs (`[USB] [USBMUX] [LOCKDOWN] [PAIR] [APPLE] [SIGN] [INSTALL]`), which are redacted when exported.
 
 ## Building
 

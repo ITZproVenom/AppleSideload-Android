@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
 
                                 Destination.INSTALL -> InstallScreen(
                                     state = state,
+                                    onInstallSource = viewModel::installSource,
                                     onPickFile = { pickFile.launch(arrayOf("*/*")) },
                                     onInstall = viewModel::install
                                 )

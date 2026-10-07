@@ -72,6 +72,16 @@ class LockdownClient private constructor(
         return request("GetValue", *extra)["Value"]
     }
 
+    /** Sets a lockdown value. Only allowed inside a session. */
+    fun setValue(key: String, value: Plist, domain: String? = null) {
+        val extra = buildList {
+            domain?.let { add("Domain" to Plist.Str(it)) }
+            add("Key" to Plist.Str(key))
+            add("Value" to value)
+        }.toTypedArray()
+        request("SetValue", *extra)
+    }
+
     fun stringValue(key: String, domain: String? = null): String? =
         getValue(key, domain)?.asString
 

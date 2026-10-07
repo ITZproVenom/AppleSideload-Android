@@ -26,6 +26,9 @@ import dev.applesideload.device.DiscoveredDevice
 import dev.applesideload.device.InstalledApp
 import dev.applesideload.device.UsbChannel
 import dev.applesideload.device.WifiChannel
+import dev.applesideload.sideload.InstallOutcome
+import dev.applesideload.sideload.InstallSource
+import dev.applesideload.sideload.ReleaseDownloader
 import dev.applesideload.sideload.SideloadEngine
 import dev.applesideload.sideload.SideloadStep
 import dev.applesideload.signing.IpaInfo
@@ -55,7 +58,9 @@ data class UiState(
     val busy: String? = null,
     val error: String? = null,
     val notice: String? = null,
-    val anisetteServers: List<AnisetteServers.Server> = AnisetteServers.bundled
+    val anisetteServers: List<AnisetteServers.Server> = AnisetteServers.bundled,
+    /** Set after SideStore was installed, for the steps left on the iPhone. */
+    val lastOutcome: InstallOutcome? = null
 )
 
 data class SelectedIpa(val file: File, val info: IpaInfo)
@@ -139,6 +144,12 @@ class AppViewModel(application: SideloadApplication) : AndroidViewModel(applicat
                 pairingHint = "Unlock the iPhone and tap Trust, then enter its passcode."
             )
         })
+        // Over USB, let the iPhone accept this phone over Wi-Fi from now on,
+        // so later installs can be wireless.
+        if (target is DiscoveredDevice.Usb) {
+            runCatching { opened.enableWirelessLockdown() }
+                .onFailure { Log.w(LogTag.LOCKDOWN, "wireless mode could not be enabled: ${it.message}") }
+        }
         _state.value = _state.value.copy(
             connection = opened.state,
             pairingHint = null,
@@ -270,32 +281,62 @@ class AppViewModel(application: SideloadApplication) : AndroidViewModel(applicat
         _state.value = _state.value.copy(selectedIpa = SelectedIpa(target, info))
     }
 
+    /** Downloads the official build of [source] and installs it. */
+    fun installSource(source: InstallSource) = run("Installing ${source.title}") {
+        val (device, account, team) = requireReady("installing ${source.title}")
+        _state.value = _state.value.copy(step = SideloadStep.Preparing("finding the latest ${source.title}"), lastOutcome = null)
+        val downloader = ReleaseDownloader(File(app.filesDir, "downloads"))
+        val build = downloader.latest(source)
+        Log.i(LogTag.APP, "${source.title} ${build.tag} is the latest release")
+        val ipa = downloader.download(build) { percent ->
+            _state.value = _state.value.copy(step = SideloadStep.Downloading(percent))
+        }
+        finishInstall(engine().install(ipa, source, device, account, team, ::onStep), "${source.title} ${build.tag}")
+    }
+
     fun install() = run("Installing") {
         val selected = _state.value.selectedIpa ?: throw SigningException(
             operation = "installing",
             reason = "no app has been chosen"
         )
+        val (device, account, team) = requireReady("installing")
+        _state.value = _state.value.copy(lastOutcome = null)
+        finishInstall(
+            engine().install(selected.file, InstallSource.CUSTOM, device, account, team, ::onStep),
+            selected.info.name
+        )
+    }
+
+    private fun engine() = SideloadEngine(app, app.anisetteProvider(), app.identityStore)
+
+    private fun onStep(step: SideloadStep) {
+        _state.value = _state.value.copy(step = step)
+    }
+
+    private fun requireReady(operation: String): Triple<DeviceSession, AppleSession, DeveloperTeam> {
         val device = session ?: throw DeviceException(
-            operation = "installing",
-            reason = "no iPhone is connected"
+            operation = operation,
+            reason = "no iPhone is connected",
+            alternative = "connect and pair the iPhone on the Device screen"
         )
         val account = _state.value.account ?: throw SigningException(
-            operation = "installing",
+            operation = operation,
             reason = "no Apple account is signed in",
             alternative = "sign in on the Account screen"
         )
         val team = _state.value.selectedTeam ?: throw SigningException(
-            operation = "installing",
+            operation = operation,
             reason = "no development team is selected"
         )
-        val engine = SideloadEngine(app, app.anisetteProvider(), app.identityStore)
-        engine.install(selected.file, device, account, team) { step ->
-            _state.value = _state.value.copy(step = step)
-        }
+        return Triple(device, account, team)
+    }
+
+    private fun finishInstall(outcome: InstallOutcome, label: String) {
         loadAppsBlocking()
         _state.value = _state.value.copy(
-            notice = "${selected.info.name} was installed",
-            step = null
+            notice = "$label was installed",
+            step = null,
+            lastOutcome = outcome
         )
     }
 

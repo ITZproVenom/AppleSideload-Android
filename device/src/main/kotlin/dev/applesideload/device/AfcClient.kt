@@ -98,6 +98,25 @@ class AfcClient(private val transport: Transport) : Closeable {
         }
     }
 
+    /** Writes a small file in one go. */
+    fun writeBytes(path: String, data: ByteArray) =
+        writeFile(path, data.inputStream(), data.size.toLong())
+
+    /** Reads a file if it is there, and null if it is not. */
+    fun readIfPresent(path: String): ByteArray? =
+        if (exists(path)) readFile(path) else null
+
+    /**
+     * Renames a path on the device.
+     *
+     * Settings files are replaced by a rename rather than rewritten in place,
+     * which is how cfprefsd saves them: it keys its cache on the inode, so an
+     * in-place rewrite can be served stale.
+     */
+    fun rename(from: String, to: String) {
+        request(OP_RENAME_PATH, cstring(from) + cstring(to))
+    }
+
     fun readFile(path: String): ByteArray {
         val handle = open(path, MODE_READ)
         val out = java.io.ByteArrayOutputStream()
@@ -256,6 +275,7 @@ class AfcClient(private val transport: Transport) : Closeable {
         private const val OP_FILE_READ = 0x0000000FL
         private const val OP_FILE_WRITE = 0x00000010L
         private const val OP_FILE_CLOSE = 0x00000014L
+        private const val OP_RENAME_PATH = 0x00000018L
 
         /** Read only. */
         private const val MODE_READ = 0x00000001L

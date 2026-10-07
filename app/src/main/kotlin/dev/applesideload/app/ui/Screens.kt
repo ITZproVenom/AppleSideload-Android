@@ -37,7 +37,9 @@ import dev.applesideload.app.UiState
 import dev.applesideload.core.LogLine
 import dev.applesideload.device.ConnectionState
 import dev.applesideload.device.DiscoveredDevice
+import dev.applesideload.sideload.InstallSource
 import dev.applesideload.sideload.SideloadStep
+import dev.applesideload.sideload.SpecialApp
 
 /** The screen scaffolding every destination uses. */
 @Composable
@@ -145,10 +147,37 @@ fun DeviceScreen(state: UiState) = Screen {
 @Composable
 fun InstallScreen(
     state: UiState,
+    onInstallSource: (InstallSource) -> Unit,
     onPickFile: () -> Unit,
     onInstall: () -> Unit
 ) = Screen {
-    Panel("App") {
+    val ready = state.connection == ConnectionState.READY && state.account != null && state.busy == null
+    if (state.connection != ConnectionState.READY || state.account == null) {
+        Panel("Before installing") {
+            if (state.connection != ConnectionState.READY) {
+                Text("Connect and pair the iPhone on the Device screen.")
+            }
+            if (state.account == null) {
+                Text("Sign in with your Apple ID on the Account screen; the signature comes from a real certificate Apple issues to it.")
+            }
+        }
+    }
+
+    Panel("SideStore + LiveContainer") {
+        Text(
+            "Downloads the latest LiveContainer + SideStore release from LiveContainer's GitHub, signs it with " +
+                "your Apple ID, installs it, and gives SideStore the pairing file so it can refresh " +
+                "itself and your apps on the iPhone with LocalDevVPN, the same way SideInstaller sets it up."
+        )
+        Button(onClick = { onInstallSource(InstallSource.SIDESTORE_LIVECONTAINER) }, enabled = ready) {
+            Text("Install SideStore + LiveContainer")
+        }
+        TextButton(onClick = { onInstallSource(InstallSource.SIDESTORE) }, enabled = ready) {
+            Text("Install SideStore only")
+        }
+    }
+
+    Panel("Custom IPA") {
         val selected: SelectedIpa? = state.selectedIpa
         if (selected == null) {
             Text("Choose an .ipa file to inspect and install.")
@@ -162,27 +191,8 @@ fun InstallScreen(
             Field("Size", "%.1f MB".format(selected.info.sizeBytes / 1_000_000.0))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onPickFile) { Text("Choose file") }
-            Button(
-                onClick = onInstall,
-                enabled = state.selectedIpa != null &&
-                    state.connection == ConnectionState.READY &&
-                    state.account != null &&
-                    state.busy == null
-            ) { Text("Sign and install") }
-        }
-        if (state.connection != ConnectionState.READY) {
-            Text(
-                "Connect and pair an iPhone first.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        if (state.account == null) {
-            Text(
-                "Sign in with an Apple account first; the signature has to come from a real " +
-                    "certificate issued to it.",
-                style = MaterialTheme.typography.bodySmall
-            )
+            OutlinedButton(onClick = onPickFile, enabled = state.busy == null) { Text("Choose file") }
+            Button(onClick = onInstall, enabled = ready && state.selectedIpa != null) { Text("Sign and install") }
         }
     }
 
@@ -190,17 +200,43 @@ fun InstallScreen(
         Panel("Progress") {
             val (label, fraction) = when (step) {
                 is SideloadStep.Preparing -> step.detail to null
+                is SideloadStep.Downloading -> "downloading" to step.percent / 100f
                 is SideloadStep.Account -> step.detail to null
                 is SideloadStep.Signing -> "signing ${step.bundle}" to null
                 is SideloadStep.Uploading -> "copying to the iPhone" to step.percent / 100f
-                is SideloadStep.Installing ->
-                    step.status.lowercase() to step.percent / 100f
-                is SideloadStep.Finished ->
-                    "installed, valid for ${step.expiresInDays} days" to 1f
+                is SideloadStep.Installing -> step.status.lowercase() to step.percent / 100f
+                is SideloadStep.HandOff -> step.detail to null
+                is SideloadStep.Finished -> "installed, valid for ${step.expiresInDays} days" to 1f
             }
             Text(label, style = MaterialTheme.typography.bodyMedium)
             if (fraction != null) {
                 LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+            } else if (state.busy != null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+
+    state.lastOutcome?.let { outcome ->
+        Panel("Finish on the iPhone") {
+            Text("${outcome.name} is installed as ${outcome.bundleId}, valid for ${outcome.expiresInDays} days.")
+            Text("1. Settings > General > VPN & Device Management: trust your Apple ID's developer app.")
+            Text("2. Settings > Privacy & Security > Developer Mode: turn it on and restart (iOS 16 and later).")
+            if (outcome.special.isSideStoreFamily) {
+                val where = if (outcome.special == SpecialApp.SIDESTORE_LIVECONTAINER) {
+                    "Open LiveContainer, then SideStore inside it"
+                } else {
+                    "Open SideStore"
+                }
+                Text("3. Install LocalDevVPN from the App Store and connect it.")
+                Text("4. $where and sign in with the same Apple ID.")
+                Text("5. Refresh in SideStore with LocalDevVPN connected, ideally every day, so nothing expires.")
+                if (!outcome.pairingHandedOff) {
+                    Text(
+                        "The pairing file could not be handed to SideStore; see Diagnostics.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }

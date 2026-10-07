@@ -18,7 +18,13 @@ import java.security.MessageDigest
  */
 class BundleSigner(
     private val identity: SigningIdentity,
-    private val profile: ProvisioningProfile
+    private val profile: ProvisioningProfile,
+    /**
+     * Entitlements added on top of the profile's, such as the keychain groups
+     * LiveContainer needs. The profile's own team-wide keychain wildcard is
+     * what lets the device accept them.
+     */
+    private val extraEntitlements: Map<String, Plist> = emptyMap()
 ) {
 
     /** Reports each bundle as it is signed, for the install screen. */
@@ -33,7 +39,7 @@ class BundleSigner(
         }
         signNested(appBundle)
         writeProfile(appBundle)
-        signBundle(appBundle, isMain = true)
+        signBundle(appBundle, kind = Kind.MAIN)
     }
 
     private fun signNested(bundle: File) {
@@ -44,14 +50,19 @@ class BundleSigner(
             .forEach { directory ->
                 directory.listFiles()?.sortedBy { it.name }?.forEach { entry ->
                     when {
-                        entry.isDirectory && entry.name.endsWith(".app") -> {
+                        // Extensions and watch apps are apps of their own: like
+                        // isideload, each gets the main app's entitlements and
+                        // a copy of its profile, which is what authorises them.
+                        entry.isDirectory && (entry.name.endsWith(".appex") || entry.name.endsWith(".app")) -> {
                             signNested(entry)
-                            signBundle(entry, isMain = false)
+                            writeProfile(entry)
+                            signBundle(entry, kind = Kind.APP)
                         }
 
+                        // Frameworks get neither, as Xcode signs them.
                         entry.isDirectory -> {
                             signNested(entry)
-                            signBundle(entry, isMain = false)
+                            signBundle(entry, kind = Kind.CODE)
                         }
 
                         entry.isFile && entry.name.endsWith(".dylib") -> signLooseBinary(entry)
@@ -65,7 +76,9 @@ class BundleSigner(
     }
 
     /** Signs one bundle: its resources, then its executable. */
-    private fun signBundle(bundle: File, isMain: Boolean) {
+    private enum class Kind { MAIN, APP, CODE }
+
+    private fun signBundle(bundle: File, kind: Kind) {
         val infoFile = File(bundle, "Info.plist")
         if (!infoFile.exists()) {
             // A framework directory without an Info.plist is not code.
@@ -95,13 +108,7 @@ class BundleSigner(
         File(bundle, "_CodeSignature").mkdirs()
         File(bundle, "_CodeSignature/CodeResources").writeBytes(resources)
 
-        val entitlements = if (isMain) {
-            profile.entitlementsXml()
-        } else {
-            // Nested code gets the identifier-only subset; claiming the full
-            // set on an extension is what produces a mismatch at install.
-            XmlPlist.write(nestedEntitlements(identifier))
-        }
+        val entitlements = if (kind == Kind.CODE) null else XmlPlist.write(appEntitlements())
 
         signExecutable(
             executable = executable,
@@ -109,7 +116,7 @@ class BundleSigner(
             infoPlist = infoFile.readBytes(),
             resources = resources,
             entitlements = entitlements,
-            isMain = isMain
+            isMain = kind == Kind.MAIN
         )
     }
 
@@ -126,14 +133,10 @@ class BundleSigner(
         )
     }
 
-    private fun nestedEntitlements(identifier: String): Plist {
-        val team = profile.teamIdentifier
-        return Plist.dict(
-            "application-identifier" to Plist.Str("$team.$identifier"),
-            "com.apple.developer.team-identifier" to Plist.Str(team),
-            "get-task-allow" to Plist.Bool(true),
-            "keychain-access-groups" to Plist.Arr(listOf(Plist.Str("$team.*")))
-        )
+    /** The profile's entitlements plus [extraEntitlements]. */
+    private fun appEntitlements(): Plist {
+        val base = profile.entitlements.asDict.orEmpty()
+        return Plist.Dict(LinkedHashMap(base).apply { putAll(extraEntitlements) })
     }
 
     private fun signExecutable(
