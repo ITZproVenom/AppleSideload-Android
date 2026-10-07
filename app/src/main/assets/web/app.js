@@ -233,7 +233,7 @@
     dyn.outcome = h("div", { class: "card", hidden: true });
     v.append(dyn.before,
       h("div", { class: "card" }, h("h2", { text: "SideStore + LiveContainer" }),
-        h("p", { class: "muted", text: "Downloads the latest official release, signs it with your Apple ID, installs it, and gives SideStore the pairing file so it can refresh itself and your apps on the iPhone with LocalDevVPN — the same setup SideInstaller makes." }),
+        h("p", { class: "muted", text: "Downloads the latest official release (on iOS 27 and later the newest build, nightly included, since only those can refresh there), signs it with your Apple ID, installs it, and gives SideStore the pairing file so it can refresh itself and your apps on the iPhone with LocalDevVPN — the same setup SideInstaller makes." }),
         dyn.sources),
       h("div", { class: "card" }, h("h2", { text: "Custom IPA" }),
         h("p", { class: "muted", text: "Upload an .ipa from this computer to the phone, check it, then sign and install it." }),

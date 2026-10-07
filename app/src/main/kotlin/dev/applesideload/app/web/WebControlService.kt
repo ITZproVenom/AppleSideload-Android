@@ -178,10 +178,17 @@ class WebControlService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, WebControlService::class.java).setAction(ACTION_START)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (error: RuntimeException) {
+                // Android refuses to start it while the app is in the background;
+                // say so in Settings instead of crashing.
+                (context.applicationContext as SideloadApplication).webControl
+                    .reportError("Android did not allow the web controller to start: ${error.message}")
             }
         }
 
