@@ -13,6 +13,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.net.InetAddress
 
 /** The page that ships in the APK and the server that answers it must agree. */
 class PageContractTest {
@@ -54,7 +55,12 @@ class PageContractTest {
         newUploadFile = { File.createTempFile("upload", ".ipa").apply { deleteOnExit() } }
     )
 
-    private fun get(path: String) = api.handle(HttpRequest("GET", path, emptyMap(), emptyMap(), 0, ByteArray(0).inputStream(), null))
+    /** What a browser on the phone's Wi-Fi sends when it opens the address shown in Settings. */
+    private val browser = InetAddress.getByName("192.168.1.30")
+    private val headers = mapOf("host" to "192.168.1.20:8686")
+
+    private fun get(path: String) =
+        api.handle(HttpRequest("GET", path, emptyMap(), headers, 0, ByteArray(0).inputStream(), browser))
 
     @Test
     fun everyFileThePageLoadsIsServedWithItsType() {
@@ -80,11 +86,16 @@ class PageContractTest {
             // The server answers a thrown HttpError with its status.
             val status = try {
                 api.handle(
-                    HttpRequest(method, path, emptyMap(), mapOf("content-type" to "application/json"), body.size.toLong(), body.inputStream(), null)
+                    HttpRequest(
+                        method, path, emptyMap(),
+                        headers + mapOf("content-type" to "application/json", "origin" to "http://192.168.1.20:8686"),
+                        body.size.toLong(), body.inputStream(), browser
+                    )
                 ).status
             } catch (error: HttpError) {
                 error.status
             }
+            assertNotEquals("$path was refused as if from elsewhere", 403, status)
             assertNotEquals("$path is not a route", 404, status)
             assertNotEquals("$path does not take $method", 405, status)
         }

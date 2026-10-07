@@ -67,11 +67,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startWebControl() {
+    /**
+     * Starts the web controller, asking first for the notification that shows
+     * its address and Stop button. Started by the app itself, it asks only
+     * once; the switch in Settings asks again, and Android decides whether
+     * the question is still shown.
+     */
+    private fun startWebControl(automatic: Boolean = false) {
         sideload.webControl.clearError()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (needsPermission && !(automatic && sideload.settings.askedForNotifications)) {
+            sideload.settings.askedForNotifications = true
             askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             WebControlService.start(this)
@@ -89,6 +96,8 @@ class MainActivity : ComponentActivity() {
                 Root(version)
             }
         }
+        // On by default: the controller starts with the app until it is turned off.
+        if (sideload.webControl.takeAutoStart()) startWebControl(automatic = true)
     }
 
     override fun onNewIntent(intent: Intent) {

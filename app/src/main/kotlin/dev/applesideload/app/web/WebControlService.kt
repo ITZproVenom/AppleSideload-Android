@@ -44,9 +44,12 @@ class WebControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // Turned off by the user, in Settings or from the notification: it stays off.
+            app.settings.webEnabled = false
             shutdown()
             return START_NOT_STICKY
         }
+        app.settings.webEnabled = true
         try {
             startInForeground(buildNotification())
         } catch (error: RuntimeException) {

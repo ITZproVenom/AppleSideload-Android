@@ -88,8 +88,9 @@ private fun WebControllerCard(web: WebStatus, onWebEnabled: (Boolean) -> Unit, o
             title = "Control this app from a browser",
             checked = web.running,
             onCheckedChange = onWebEnabled,
-            subtitle = "From any device on the same network: Wi-Fi, this phone's hotspot or USB " +
-                "tethering. There is no login, so only turn it on in a network you trust."
+            subtitle = "On by default. Any device on the same network (Wi-Fi, this phone's hotspot " +
+                "or USB tethering) can open it, and there is no login, so turn it off on networks " +
+                "you do not trust."
         )
         web.error?.let {
             IconLine(
