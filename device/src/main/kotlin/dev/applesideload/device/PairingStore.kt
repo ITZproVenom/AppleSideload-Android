@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import dev.applesideload.core.BinaryPlist
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
+import dev.applesideload.device.remote.RpPairingFile
 import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -71,6 +72,79 @@ class PairingStore(context: Context) {
 
     private fun fileFor(udid: String) = File(directory, sanitise(udid) + SUFFIX)
 
+    // MARK: - Remote Pairing (iOS 17 and later; the only wireless route on iOS 27)
+
+    private val remoteDirectory = File(directory, "remote").apply { mkdirs() }
+
+    /**
+     * This phone's Remote Pairing identity: made the first time it is needed,
+     * then kept, because every iPhone paired with this phone (and the copy
+     * SideStore is given) knows it by this identifier and key.
+     */
+    @Synchronized
+    fun remoteIdentity(): RpPairingFile {
+        val file = File(remoteDirectory, IDENTITY_FILE)
+        if (file.exists()) {
+            try {
+                val stored = RpPairingFile.fromStoredPlist(decrypt(file.readBytes()))
+                return RpPairingFile(stored.identifier, stored.privateKey, stored.publicKey, stored.hostAltIrk)
+            } catch (error: Exception) {
+                // Kept aside rather than deleted, in case it can be read later.
+                file.renameTo(File(remoteDirectory, "$IDENTITY_FILE.unreadable"))
+                Log.w(
+                    LogTag.PAIR,
+                    "this phone's Remote Pairing identity could not be read (${error.message}); " +
+                        "making a new one. iPhones paired with the old one keep working through their own records."
+                )
+            }
+        }
+        val fresh = RpPairingFile.generate()
+        file.writeBytes(encrypt(fresh.toStoredPlist()))
+        Log.i(LogTag.PAIR, "made this phone's Remote Pairing identity")
+        return fresh
+    }
+
+    /** The Remote Pairing record for one iPhone, or null if there is none or it cannot be read. */
+    fun loadRemote(udid: String): RpPairingFile? {
+        val file = remoteFile(udid)
+        if (!file.exists()) return null
+        return try {
+            RpPairingFile.fromStoredPlist(decrypt(file.readBytes()))
+        } catch (error: Exception) {
+            Log.w(LogTag.PAIR, "the Remote Pairing record for this iPhone could not be read: ${error.message}")
+            null
+        }
+    }
+
+    /** Stores [record], which must know its iPhone, and the address it was reached at, if known. */
+    fun saveRemote(record: RpPairingFile, host: String?) {
+        val udid = record.udid?.takeIf { it.isNotBlank() }
+        require(udid != null) { "a Remote Pairing record must know its iPhone" }
+        remoteFile(udid).writeBytes(encrypt(record.toStoredPlist()))
+        if (!host.isNullOrBlank()) hostFile(udid).writeText(host)
+        Log.i(LogTag.PAIR, "stored the Remote Pairing record for ${record.deviceName ?: "this iPhone"}")
+    }
+
+    /** Where the iPhone was last reached through its tunnel, as an IP address. */
+    fun remoteHost(udid: String): String? =
+        hostFile(udid).takeIf { it.exists() }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** Every iPhone paired with this phone through Remote Pairing whose record can be read. */
+    fun remoteDevices(): List<RpPairingFile> = remoteDirectory.listFiles()
+        ?.filter { it.name.endsWith(REMOTE_SUFFIX) }
+        ?.mapNotNull { loadRemote(it.name.removeSuffix(REMOTE_SUFFIX)) }
+        .orEmpty()
+
+    fun forgetRemote(udid: String) {
+        val removed = remoteFile(udid).delete()
+        hostFile(udid).delete()
+        if (removed) Log.i(LogTag.PAIR, "removed the Remote Pairing record for this iPhone")
+    }
+
+    private fun remoteFile(udid: String) = File(remoteDirectory, sanitise(udid) + REMOTE_SUFFIX)
+
+    private fun hostFile(udid: String) = File(remoteDirectory, sanitise(udid) + HOST_SUFFIX)
+
     private fun sanitise(udid: String) = udid.filter { it.isLetterOrDigit() || it == '-' }
 
     // MARK: - Keystore
@@ -126,5 +200,8 @@ class PairingStore(context: Context) {
         const val KEY_ALIAS = "applesideload.pairing"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val SUFFIX = ".pairing"
+        const val REMOTE_SUFFIX = ".rppairing"
+        const val HOST_SUFFIX = ".host"
+        const val IDENTITY_FILE = "identity.rppairing-host"
     }
 }

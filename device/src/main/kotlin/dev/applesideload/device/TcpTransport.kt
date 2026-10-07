@@ -76,5 +76,14 @@ class TcpTransport private constructor(private val socket: Socket) : Transport {
             Log.i(LogTag.USBMUX, "connected to $host:$port")
             return TcpTransport(socket)
         }
+
+        /**
+         * Wraps a connection the iPhone made to this phone, as it does when it
+         * pairs from Settings > Privacy & Security > Developer Mode.
+         */
+        fun accepted(socket: Socket): TcpTransport {
+            runCatching { socket.tcpNoDelay = true }
+            return TcpTransport(socket)
+        }
     }
 }

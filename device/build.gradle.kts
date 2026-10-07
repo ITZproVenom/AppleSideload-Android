@@ -31,8 +31,12 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     api(libs.bouncycastle.prov)
     api(libs.bouncycastle.pkix)
+    // TLS-PSK for the Remote Pairing tunnel (Java's own TLS has no PSK suites).
+    api(libs.bouncycastle.tls)
     implementation(libs.kotlin.coroutines.core)
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlin.coroutines.test)
+    // Android's own org.json is a stub in local unit tests; this is the real one.
+    testImplementation(libs.orgjson)
 }
