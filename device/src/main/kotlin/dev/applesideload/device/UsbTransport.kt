@@ -30,8 +30,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    nothing but the AppleUSBMux placeholder, which is reported rather than
  *    retried silently.
  *  * Android hands out a UsbDeviceConnection for the current configuration.
- *    The mux interface frequently lives in a later configuration, so the
- *    configuration is set explicitly before the interface is claimed.
+ *    The mux interface frequently lives in a later configuration. The phone
+ *    is asked which configuration is active; if that one has no mux
+ *    interface, the highest configuration that does is selected before the
+ *    interface is claimed, which is what usbmuxd does too.
+ *  * Reads stay queued on the input endpoint the whole time, so nothing the
+ *    phone sends is lost to a timed out transfer.
  */
 class UsbTransport private constructor(
     private val connection: UsbDeviceConnection,

@@ -274,8 +274,12 @@ fun AppsScreen(
     onRefresh: () -> Unit,
     onUninstall: (String) -> Unit
 ) = Screen {
+    // The list comes from the iPhone, so nothing here works without one.
+    val ready = state.connection == ConnectionState.READY && state.busy == null
     Panel("Installed by you") {
-        if (state.apps.isEmpty()) {
+        if (state.connection != ConnectionState.READY) {
+            Text("Connect and pair an iPhone to see the apps you installed on it.")
+        } else if (state.apps.isEmpty()) {
             Text("No sideloaded apps were reported by the device.")
         }
         state.apps.forEach { installed ->
@@ -292,11 +296,11 @@ fun AppsScreen(
                         fontFamily = FontFamily.Monospace
                     )
                 }
-                TextButton(onClick = { onUninstall(installed.bundleId) }) { Text("Remove") }
+                TextButton(onClick = { onUninstall(installed.bundleId) }, enabled = ready) { Text("Remove") }
             }
             Divider()
         }
-        OutlinedButton(onClick = onRefresh) { Text("Refresh") }
+        OutlinedButton(onClick = onRefresh, enabled = ready) { Text("Refresh") }
     }
 }
 
