@@ -27,6 +27,10 @@ class PageContractTest {
             override fun refreshDevices() = Unit
             override fun connectById(id: String) = Action.Started
             override fun connectWireless(address: String) = Action.Started
+            override fun startRemotePairing() = Action.Started
+            override fun stopRemotePairing() = Unit
+            override fun connectRemote(udid: String) = Action.Started
+            override fun forgetRemote(udid: String) = Action.Started
             override fun disconnect() = Unit
             override fun loadApps() = Action.Started
             override fun uninstall(bundleId: String) = Action.Started

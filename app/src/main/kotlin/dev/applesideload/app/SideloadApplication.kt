@@ -10,6 +10,7 @@ import dev.applesideload.core.LogTag
 import dev.applesideload.app.web.WebControl
 import dev.applesideload.device.DeviceDiscovery
 import dev.applesideload.device.PairingStore
+import dev.applesideload.device.RemotePairingNetwork
 import dev.applesideload.sideload.IdentityStore
 import java.util.UUID
 
@@ -68,6 +69,9 @@ class SideloadApplication : Application() {
         private set
     lateinit var discovery: DeviceDiscovery
         private set
+    /** Offers this phone for Remote Pairing and finds paired iPhones over Bonjour. */
+    lateinit var remoteNetwork: RemotePairingNetwork
+        private set
     lateinit var controller: AppController
         private set
     lateinit var webControl: WebControl
@@ -79,6 +83,7 @@ class SideloadApplication : Application() {
         pairingStore = PairingStore(this)
         identityStore = IdentityStore(this)
         discovery = DeviceDiscovery(this)
+        remoteNetwork = RemotePairingNetwork(this, pairingStore)
         controller = AppController(this)
         webControl = WebControl(this)
         Log.i(LogTag.APP, "AppleSideload started")

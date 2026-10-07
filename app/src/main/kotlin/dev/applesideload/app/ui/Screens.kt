@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.FilterChip
@@ -31,7 +32,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.applesideload.app.RemoteDeviceSummary
+import dev.applesideload.app.RemotePairingPrompt
 import dev.applesideload.app.SelectedIpa
 import dev.applesideload.app.SettingsSnapshot
 import dev.applesideload.app.web.WebStatus
@@ -62,7 +67,11 @@ fun HomeScreen(
     onRefresh: () -> Unit,
     onConnect: (DiscoveredDevice) -> Unit,
     onConnectWireless: (String) -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onStartRemotePairing: () -> Unit,
+    onStopRemotePairing: () -> Unit,
+    onConnectRemote: (String) -> Unit,
+    onForgetRemote: (String) -> Unit
 ) = Screen {
     Panel("Connection") {
         Field("State", state.connection.name.lowercase().replace('_', ' '))
@@ -101,12 +110,15 @@ fun HomeScreen(
         }
     }
 
+    RemotePairingPanel(state, onStartRemotePairing, onStopRemotePairing, onConnectRemote, onForgetRemote)
+
     Panel("Wireless mode (no cable)") {
         var address by rememberSaveable { mutableStateOf(lastWirelessAddress) }
         Text(
             "Put both phones on the same Wi-Fi network, unlock the iPhone, and enter its address " +
-                "from Settings > Wi-Fi > (i). The iPhone asks to Trust this phone; after that, " +
-                "installs go over Wi-Fi.",
+                "from Settings > Wi-Fi > (i). An iPhone paired wirelessly (above) is reached through " +
+                "its encrypted tunnel; any other one asks to Trust this phone, which iOS 27 no " +
+                "longer allows over Wi-Fi.",
             style = MaterialTheme.typography.bodyMedium
         )
         OutlinedTextField(
@@ -134,6 +146,111 @@ fun HomeScreen(
     }
 }
 
+/** Remote Pairing: offering this phone to an iPhone, and the iPhones paired that way. */
+@Composable
+private fun RemotePairingPanel(
+    state: UiState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onConnect: (String) -> Unit,
+    onForget: (String) -> Unit
+) = Panel("Wireless pairing (iOS 17 and later)") {
+    var forgetting by remember { mutableStateOf<RemoteDeviceSummary?>(null) }
+    Text(
+        "Pairs the iPhone with this phone with no cable, the way iOS 27 requires. Tap Pair " +
+            "wirelessly, then on the iPhone open Settings > Privacy & Security > Developer Mode, " +
+            "pick this phone and type the PIN shown here. If Developer Mode is not listed, connect " +
+            "the iPhone once with a USB cable instead: that sets up wireless access by itself.",
+        style = MaterialTheme.typography.bodyMedium
+    )
+    val prompt = state.remotePairing
+    if (prompt == null) {
+        Button(onClick = onStart) { Text("Pair wirelessly") }
+    } else {
+        Field("Status", stageLabel(prompt.stage))
+        Field("This phone", prompt.hostName)
+        prompt.pin?.let { pin ->
+            Text(
+                pin,
+                style = MaterialTheme.typography.displayMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 6.sp
+                ),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (prompt.stage == RemotePairingPrompt.Stage.ADVERTISING) {
+            Text(
+                "On the iPhone: Settings > Privacy & Security > Developer Mode, then pick " +
+                    "\u201c${prompt.hostName}\u201d.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        prompt.pairedWith?.let { Text("Paired with $it.", style = MaterialTheme.typography.bodyMedium) }
+        prompt.message?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (prompt.stage == RemotePairingPrompt.Stage.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+        val offering = prompt.stage == RemotePairingPrompt.Stage.STARTING ||
+            prompt.stage == RemotePairingPrompt.Stage.ADVERTISING ||
+            prompt.stage == RemotePairingPrompt.Stage.PIN
+        OutlinedButton(onClick = onStop) { Text(if (offering) "Stop" else "Close") }
+    }
+    if (state.remoteDevices.isNotEmpty()) {
+        Text("Paired iPhones", style = MaterialTheme.typography.titleSmall)
+        state.remoteDevices.forEach { device ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(device.name, style = MaterialTheme.typography.bodyLarge)
+                    device.lastAddress?.let {
+                        Text(
+                            "last reached at $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                TextButton(onClick = { forgetting = device }, enabled = state.busy == null) { Text("Forget") }
+                Button(onClick = { onConnect(device.udid) }, enabled = state.busy == null) { Text("Connect") }
+            }
+        }
+    }
+    forgetting?.let { device ->
+        AlertDialog(
+            onDismissRequest = { forgetting = null },
+            title = { Text("Forget ${device.name}?") },
+            text = { Text("This phone will need to pair with it again to reach it over Wi-Fi.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    forgetting = null
+                    onForget(device.udid)
+                }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+private fun stageLabel(stage: RemotePairingPrompt.Stage): String = when (stage) {
+    RemotePairingPrompt.Stage.STARTING -> "Starting"
+    RemotePairingPrompt.Stage.ADVERTISING -> "Waiting for the iPhone"
+    RemotePairingPrompt.Stage.PIN -> "Type this PIN on the iPhone"
+    RemotePairingPrompt.Stage.PAIRED -> "Paired"
+    RemotePairingPrompt.Stage.FAILED -> "Stopped"
+}
+
 @Composable
 fun DeviceScreen(state: UiState) = Screen {
     val device = state.device
@@ -151,6 +268,7 @@ fun DeviceScreen(state: UiState) = Screen {
     }
     Panel("Pairing") {
         Field("State", state.connection.name.lowercase().replace('_', ' '))
+        state.transport?.let { Field("Link", it) }
         Text(
             "The pairing record is stored on this phone under a key in the Android Keystore " +
                 "and is what lets the iPhone be reached again without tapping Trust each time.",
@@ -160,10 +278,9 @@ fun DeviceScreen(state: UiState) = Screen {
     if (device.needsRemoteTunnel) {
         Panel("iOS 17 and later") {
             Text(
-                "Installing works normally on this version. The developer services that used " +
-                    "to need a mounted developer disk image now sit behind an encrypted " +
-                    "tunnel that requires a connection this app does not implement, so " +
-                    "debugging features are unavailable here.",
+                "Installing works over the cable and, once the iPhone is paired through Remote " +
+                    "Pairing, over Wi-Fi through the encrypted tunnel iOS 17 introduced. " +
+                    "Debugging features (JIT, the developer disk image) are not part of this app.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }

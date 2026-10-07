@@ -141,6 +141,7 @@
     wirelessInput = h("input", { type: "text", inputmode: "decimal", placeholder: "iPhone IP, e.g. 192.168.1.23", "aria-label": "iPhone IP address" });
     wirelessInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connectWireless(); });
     dyn.info = h("div", { class: "card", hidden: true });
+    dyn.remote = h("div", { class: "card" });
     v.append(
       dyn.status,
       h("div", { class: "card" },
@@ -148,13 +149,47 @@
           h("button", { text: "Refresh", onclick: () => act("/api/devices/refresh") })),
         h("p", { class: "muted", text: "Wired: plug the iPhone into the Android phone with a cable. The first time, tap Allow in the USB dialog on the Android phone. Wireless: iPhones already paired with this app and with Wi-Fi sync on show up here by themselves." }),
         dyn.found),
+      dyn.remote,
       h("div", { class: "card" },
         h("h2", { text: "Wireless mode (no cable)" }),
-        h("p", { class: "muted", text: "Enter the iPhone's address from Settings > Wi-Fi > (i) on the iPhone. It must be on the same network as the Android phone. The iPhone asks to Trust this phone the first time. iOS 27 only pairs wirelessly through Remote Pairing, which this app does not implement yet; there, pair once with a cable." }),
+        h("p", { class: "muted", text: "Enter the iPhone's address from Settings > Wi-Fi > (i) on the iPhone. It must be on the same network as the Android phone. An iPhone paired wirelessly (above) is reached through its encrypted tunnel; any other one asks to Trust this phone the first time, which iOS 27 no longer allows over Wi-Fi." }),
         h("div", { class: "row" }, h("div", { class: "grow" }, wirelessInput), actionButton("Connect", connectWireless, "primary"))),
       dyn.info);
   }
   function connectWireless() { act("/api/connect-wireless", { address: wirelessInput.value.trim() }); }
+
+  const PAIR_STAGE = {
+    STARTING: "Starting…", ADVERTISING: "Waiting for the iPhone", PIN: "Type this PIN on the iPhone",
+    PAIRED: "Paired", FAILED: "Stopped"
+  };
+  function renderRemote() {
+    const s = state;
+    const p = s.remotePairing;
+    const offering = p && (p.stage === "STARTING" || p.stage === "ADVERTISING" || p.stage === "PIN");
+    fill(dyn.remote,
+      h("div", { class: "row spread" }, h("h2", { text: "Wireless pairing (iOS 17 and later)" }),
+        p ? h("button", { text: offering ? "Stop" : "Close", onclick: () => act("/api/remote/stop") })
+          : h("button", { class: "primary", text: "Pair wirelessly", onclick: () => act("/api/remote/start") })),
+      h("p", { class: "muted", text: "Pairs the iPhone with this phone with no cable, the way iOS 27 requires. Tap Pair wirelessly, then on the iPhone open Settings > Privacy & Security > Developer Mode, pick this phone and type the PIN shown here. If Developer Mode is not listed, connect the iPhone once with a USB cable instead: that sets up wireless access by itself." }),
+      p ? h("div", { class: "pairing" },
+        field("Status", PAIR_STAGE[p.stage] || p.stage),
+        field("This phone", p.hostName),
+        p.pin ? h("div", { class: "pin mono", role: "status", "aria-label": "PIN " + p.pin.split("").join(" "), text: p.pin }) : null,
+        p.stage === "ADVERTISING" ? h("div", { class: "hint", text: "On the iPhone: Settings > Privacy & Security > Developer Mode, then pick \u201c" + p.hostName + "\u201d." }) : null,
+        p.pairedWith ? h("p", { text: "Paired with " + p.pairedWith + "." }) : null,
+        p.message ? h("p", { class: p.stage === "FAILED" ? "error" : "muted", text: p.message }) : null) : null,
+      s.remoteDevices.length ? h("h3", { text: "Paired iPhones" }) : null,
+      s.remoteDevices.length ? h("div", { class: "list" }, ...s.remoteDevices.map((d) =>
+        h("div", { class: "item" },
+          h("div", {}, h("span", { class: "title", text: d.name }),
+            d.model ? h("span", { class: "tag", text: d.model }) : null,
+            d.lastAddress ? h("div", { class: "muted mono", text: "last reached at " + d.lastAddress }) : null),
+          h("div", { class: "row" },
+            actionButton("Connect", () => act("/api/remote/connect", { udid: d.udid }), "primary"),
+            actionButton("Forget", () => {
+              if (confirm("Forget " + d.name + "? This phone will need to pair with it again.")) act("/api/remote/forget", { udid: d.udid });
+            }, "danger"))))) : null);
+  }
 
   function renderDevice() {
     const s = state;
@@ -180,6 +215,7 @@
         field("UDID", d.udid, true), field("Architecture", d.cpuArchitecture),
         d.wifiAddress ? field("Wi-Fi MAC", d.wifiAddress, true) : null);
     }
+    renderRemote();
   }
 
   // Install

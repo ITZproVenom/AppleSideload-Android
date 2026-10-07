@@ -54,6 +54,16 @@ class WebApi(
                 action { controls.connectWireless(value) }
             }
             "POST" to "/api/disconnect" -> done { controls.disconnect() }
+            "POST" to "/api/remote/start" -> action { controls.startRemotePairing() }
+            "POST" to "/api/remote/stop" -> done { controls.stopRemotePairing() }
+            "POST" to "/api/remote/connect" -> {
+                val value = body(request).string("udid")
+                action { controls.connectRemote(value) }
+            }
+            "POST" to "/api/remote/forget" -> {
+                val value = body(request).string("udid")
+                action { controls.forgetRemote(value) }
+            }
             "POST" to "/api/apps/refresh" -> action { controls.loadApps() }
             "POST" to "/api/apps/uninstall" -> {
                 val value = body(request).string("bundleId")
@@ -233,6 +243,7 @@ class WebApi(
         private val KNOWN = setOf(
             "/api/state", "/api/logs", "/api/logs/export", "/api/dismiss",
             "/api/devices/refresh", "/api/connect", "/api/connect-wireless", "/api/disconnect",
+            "/api/remote/start", "/api/remote/stop", "/api/remote/connect", "/api/remote/forget",
             "/api/apps/refresh", "/api/apps/uninstall", "/api/signin", "/api/2fa/code", "/api/2fa/sms",
             "/api/team", "/api/signout", "/api/revoke", "/api/install-source", "/api/install",
             "/api/ipa", "/api/settings"

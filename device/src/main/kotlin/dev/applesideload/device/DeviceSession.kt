@@ -120,6 +120,9 @@ class DeviceSession private constructor(
     /** True when this session runs through a Remote Pairing tunnel. */
     val isTunnel: Boolean get() = channel is TunnelChannel
 
+    /** False once a tunnel session's tunnel has closed; a cable or lockdown session says true. */
+    val isAlive: Boolean get() = (channel as? TunnelChannel)?.tunnel?.isAlive ?: true
+
     /**
      * The Remote Pairing record for this iPhone, when this phone has one: it
      * is what reaches the iPhone over Wi-Fi on iOS 17 and later, and what

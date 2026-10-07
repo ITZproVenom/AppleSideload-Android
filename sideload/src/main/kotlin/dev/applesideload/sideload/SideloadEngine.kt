@@ -241,14 +241,19 @@ class SideloadEngine(
     }
 
     /**
-     * Gives SideStore the pairing file, as SideInstaller does.
+     * Gives SideStore its pairing files, as SideInstaller does.
      *
-     * With it SideStore reaches lockdownd through LocalDevVPN and refreshes
+     * With them SideStore reaches the iPhone through LocalDevVPN and refreshes
      * itself, LiveContainer and every app it installed, on the iPhone, every
-     * day, with no computer and without this phone. Older builds and the
-     * SideStore inside LiveContainer read ALTPairingFile.mobiledevicepairing;
-     * nightlies from September 2026 read PairingFile_Lockdown.plist once
-     * isPairingReset is off and activePairingProtocol says lockdown.
+     * day, with no computer and without this phone.
+     *
+     * Older builds and the SideStore inside LiveContainer read the classic
+     * lockdown record from ALTPairingFile.mobiledevicepairing. Nightlies from
+     * September 2026 read PairingFile_Lockdown.plist or
+     * PairingFile_RemoteRP.plist instead, only once isPairingReset is off,
+     * and load the one activePairingProtocol names. On iOS 27 lockdownd
+     * resets connections that arrive through LocalDevVPN, so there the
+     * Remote Pairing record is the one SideStore can use.
      */
     private fun handOffPairing(
         device: DeviceSession,
@@ -261,9 +266,13 @@ class SideloadEngine(
             Log.w(LogTag.LOCKDOWN, "could not enable wireless lockdown: ${it.message}; SideStore may refuse the pairing file")
         }
 
-        val pairing = device.pairingFileForApps()
-        val keys = PlistReader.parse(pairing).asDict.orEmpty().keys
-        val missing = REQUIRED_PAIRING_KEYS.filterNot { it in keys }
+        // A session through the Wi-Fi tunnel has a lockdown record only if
+        // the iPhone was connected by cable to this phone before.
+        val lockdown = device.record?.let { device.pairingFileForApps() }
+        val missing = lockdown?.let { file ->
+            val keys = PlistReader.parse(file).asDict.orEmpty().keys
+            REQUIRED_PAIRING_KEYS.filterNot { it in keys }
+        }.orEmpty()
         if (missing.isNotEmpty()) {
             Log.w(
                 LogTag.PAIR,
@@ -271,21 +280,46 @@ class SideloadEngine(
                     "Unpair and pair again with the iPhone unlocked so the escrow bag is issued."
             )
         }
+        val completeLockdown = lockdown?.takeIf { missing.isEmpty() }
+        val remote = device.remotePairing?.toAppPlist()
+        val legacy = lockdown ?: remote ?: throw DeviceException(
+            operation = "giving SideStore its pairing file",
+            reason = "this phone has no pairing record for ${device.info.name}",
+            limitation = "SideStore is installed, but cannot refresh apps by itself without one",
+            alternative = "connect the iPhone by USB or pair it wirelessly, then install SideStore again"
+        )
+        val lockdownBlocked = device.info.majorVersion >= LOCKDOWN_OVER_VPN_BLOCKED_FROM
+        val protocol = when {
+            remote != null && (lockdownBlocked || completeLockdown == null) -> PROTOCOL_REMOTE
+            completeLockdown != null -> PROTOCOL_LOCKDOWN
+            else -> null
+        }
+        if (lockdownBlocked && remote == null) {
+            Log.w(
+                LogTag.PAIR,
+                "on iOS ${device.info.majorVersion} SideStore can only reach the iPhone with a Remote Pairing " +
+                    "record, and this phone has none for ${device.info.name}, so SideStore will ask for a " +
+                    "pairing file. Pair wirelessly from this app, then install SideStore again."
+            )
+        }
 
         onStep(SideloadStep.HandOff("writing the pairing file into SideStore"))
         val prefix = "/Documents/" + special.sideStoreDocumentsPrefix
         device.appContainer(hostBundleId, wholeContainer = true).use { afc ->
             afc.makeDirectories(prefix.trimEnd('/'))
-            writeVerified(afc, prefix + "ALTPairingFile.mobiledevicepairing", pairing)
-            if (missing.isEmpty()) {
-                writeVerified(afc, prefix + "PairingFile_Lockdown.plist", pairing)
+            writeVerified(afc, prefix + LEGACY_PAIRING_FILE, legacy)
+            completeLockdown?.let { writeVerified(afc, prefix + LOCKDOWN_PAIRING_FILE, it) }
+            remote?.let { writeVerified(afc, prefix + REMOTE_PAIRING_FILE, it) }
+            if (protocol != null) {
                 val prefsPath = "/" + special.sideStorePreferences(hostBundleId)
                 val existing = afc.readIfPresent(prefsPath)
                 val prefs = LinkedHashMap(
                     existing?.takeIf { it.isNotEmpty() }?.let { PlistReader.parse(it).asDict }.orEmpty()
                 )
+                // What SideStore's own import sets. A protocol picked in its
+                // settings lives in preferredPairingProtocol and is left alone.
                 prefs["isPairingReset"] = Plist.Bool(false)
-                prefs["activePairingProtocol"] = Plist.Str("lockdown")
+                prefs["activePairingProtocol"] = Plist.Str(protocol)
                 afc.makeDirectories(prefsPath.substringBeforeLast('/'))
                 val staging = "$prefsPath.applesideload"
                 writeVerified(afc, staging, BinaryPlist.write(Plist.Dict(prefs)))
@@ -293,7 +327,11 @@ class SideloadEngine(
                 afc.rename(staging, prefsPath)
             }
         }
-        Log.i(LogTag.PAIR, "SideStore has its pairing file and can refresh on the iPhone")
+        when (protocol) {
+            PROTOCOL_REMOTE -> Log.i(LogTag.PAIR, "SideStore has its Remote Pairing file and can refresh on the iPhone")
+            PROTOCOL_LOCKDOWN -> Log.i(LogTag.PAIR, "SideStore has its pairing file and can refresh on the iPhone")
+            else -> Log.w(LogTag.PAIR, "SideStore has only an incomplete pairing file; it will ask for a new one")
+        }
     }
 
     private fun writeVerified(afc: AfcClient, path: String, data: ByteArray) {
@@ -385,6 +423,19 @@ class SideloadEngine(
         const val STAGING = "/PublicStaging"
 
         /** What SideStore's minimuxer requires in a lockdown pairing file. */
+        const val LEGACY_PAIRING_FILE = "ALTPairingFile.mobiledevicepairing"
+        const val LOCKDOWN_PAIRING_FILE = "PairingFile_Lockdown.plist"
+        const val REMOTE_PAIRING_FILE = "PairingFile_RemoteRP.plist"
+        const val PROTOCOL_LOCKDOWN = "lockdown"
+        const val PROTOCOL_REMOTE = "rppairing"
+
+        /**
+         * From iOS 27 lockdownd resets connections through LocalDevVPN even
+         * with a complete record (SideStore issue 1532), so SideStore is
+         * pointed at the Remote Pairing record there.
+         */
+        const val LOCKDOWN_OVER_VPN_BLOCKED_FROM = 27
+
         val REQUIRED_PAIRING_KEYS = listOf(
             "WiFiMACAddress", "SystemBUID", "RootPrivateKey", "HostPrivateKey", "HostID",
             "RootCertificate", "UDID", "EscrowBag", "HostCertificate", "DeviceCertificate"

@@ -8,6 +8,7 @@ import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
 import dev.applesideload.device.remote.RpPairingFile
 import java.io.File
+import java.io.IOException
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.UUID
@@ -36,7 +37,7 @@ class PairingStore(context: Context) {
         if (file.exists()) {
             file.readText().trim()
         } else {
-            UUID.randomUUID().toString().uppercase().also { file.writeText(it) }
+            UUID.randomUUID().toString().uppercase().also { writeAtomically(file, it.toByteArray()) }
         }
     }
 
@@ -53,9 +54,7 @@ class PairingStore(context: Context) {
 
     fun save(record: PairingRecord) {
         require(record.udid.isNotEmpty()) { "a pairing record must know its device" }
-        fileFor(record.udid).writeBytes(
-            encrypt(BinaryPlist.write(record.toPlist(withPrivateKeys = true)))
-        )
+        writeAtomically(fileFor(record.udid), encrypt(BinaryPlist.write(record.toPlist(withPrivateKeys = true))))
         Log.i(LogTag.PAIR, "stored the pairing record for this device")
     }
 
@@ -99,7 +98,7 @@ class PairingStore(context: Context) {
             }
         }
         val fresh = RpPairingFile.generate()
-        file.writeBytes(encrypt(fresh.toStoredPlist()))
+        writeAtomically(file, encrypt(fresh.toStoredPlist()))
         Log.i(LogTag.PAIR, "made this phone's Remote Pairing identity")
         return fresh
     }
@@ -120,8 +119,8 @@ class PairingStore(context: Context) {
     fun saveRemote(record: RpPairingFile, host: String?) {
         val udid = record.udid?.takeIf { it.isNotBlank() }
         require(udid != null) { "a Remote Pairing record must know its iPhone" }
-        remoteFile(udid).writeBytes(encrypt(record.toStoredPlist()))
-        if (!host.isNullOrBlank()) hostFile(udid).writeText(host)
+        writeAtomically(remoteFile(udid), encrypt(record.toStoredPlist()))
+        if (!host.isNullOrBlank()) writeAtomically(hostFile(udid), host.toByteArray())
         Log.i(LogTag.PAIR, "stored the Remote Pairing record for ${record.deviceName ?: "this iPhone"}")
     }
 
@@ -146,6 +145,16 @@ class PairingStore(context: Context) {
     private fun hostFile(udid: String) = File(remoteDirectory, sanitise(udid) + HOST_SUFFIX)
 
     private fun sanitise(udid: String) = udid.filter { it.isLetterOrDigit() || it == '-' }
+
+    /** Writes through a temporary file and a rename, so a crash never leaves half a record. */
+    private fun writeAtomically(file: File, bytes: ByteArray) {
+        val temporary = File(file.parentFile, file.name + ".tmp")
+        temporary.writeBytes(bytes)
+        if (!temporary.renameTo(file)) {
+            temporary.delete()
+            throw IOException("could not store ${file.name}")
+        }
+    }
 
     // MARK: - Keystore
 

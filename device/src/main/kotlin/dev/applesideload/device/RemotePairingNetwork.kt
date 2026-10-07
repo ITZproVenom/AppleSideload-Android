@@ -79,6 +79,9 @@ class RemotePairingNetwork(context: Context, private val store: PairingStore) {
             port = server.localPort
             PairableHost.txtRecord(identity, name).forEach { (key, value) -> setAttribute(key, value) }
         }
+        // Assigned before registerService, so it is set by the time any
+        // callback can run.
+        lateinit var advertisement: Advertisement
         val registration = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(registered: NsdServiceInfo) {
                 Log.i(LogTag.PAIR, "offering this phone for pairing as \"$name\" (${registered.serviceName}) on port ${server.localPort}")
@@ -86,14 +89,16 @@ class RemotePairingNetwork(context: Context, private val store: PairingStore) {
             }
 
             override fun onRegistrationFailed(failed: NsdServiceInfo, errorCode: Int) {
+                // Closing first marks the advertisement closed, so the accept
+                // loop exits quietly instead of reporting a second problem.
+                advertisement.close()
                 events.onProblem("Android could not advertise this phone on the network (NSD error $errorCode)", true)
-                runCatching { server.close() }
             }
 
             override fun onServiceUnregistered(unregistered: NsdServiceInfo) = Unit
             override fun onUnregistrationFailed(failed: NsdServiceInfo, errorCode: Int) = Unit
         }
-        val advertisement = Advertisement(server, registration, identity)
+        advertisement = Advertisement(server, registration, identity)
         try {
             nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, registration)
         } catch (error: RuntimeException) {
@@ -198,12 +203,29 @@ class RemotePairingNetwork(context: Context, private val store: PairingStore) {
     private fun resolve(info: NsdServiceInfo, timeoutMs: Long): NsdServiceInfo? {
         val latch = CountDownLatch(1)
         val out = AtomicReference<NsdServiceInfo?>(null)
-        @Suppress("DEPRECATION")
-        nsd.resolveService(info, object : NsdManager.ResolveListener {
+        val listener = object : NsdManager.ResolveListener {
             override fun onResolveFailed(failed: NsdServiceInfo, errorCode: Int) { latch.countDown() }
             override fun onServiceResolved(resolved: NsdServiceInfo) { out.set(resolved); latch.countDown() }
-        })
-        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        }
+        try {
+            @Suppress("DEPRECATION")
+            nsd.resolveService(info, listener)
+        } catch (error: RuntimeException) {
+            Log.w(LogTag.TUNNEL, "could not resolve ${info.serviceName}: ${error.message}")
+            return null
+        }
+        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // A resolve left running makes the next one fail as "already
+                // active"; Android 14 added a way to cancel it.
+                runCatching { nsd.stopServiceResolution(listener) }
+            } else {
+                // Android 13 and older cannot cancel a resolve, so later
+                // lookups may fail until this one ends; callers then fall
+                // back to the address the iPhone last used.
+                Log.w(LogTag.TUNNEL, "Bonjour did not resolve ${info.serviceName} in time")
+            }
+        }
         return out.get()
     }
 
