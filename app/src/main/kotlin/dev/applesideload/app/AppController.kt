@@ -1,6 +1,13 @@
 package dev.applesideload.app
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.apple.AnisetteUnavailable
 import dev.applesideload.apple.AppleAuth
@@ -148,6 +155,29 @@ class AppController(private val app: SideloadApplication) : Controls {
     @Volatile
     private var session: DeviceSession? = null
 
+    /** The USB device behind [session], so unplugging it can end the session. */
+    @Volatile
+    private var sessionUsbName: String? = null
+
+    /** Keeps the device list current as cables come and go, with or without a screen open. */
+    private val usbEvents = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> refreshDevices()
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    @Suppress("DEPRECATION")
+                    val gone = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    refreshDevices()
+                    if (gone != null && gone.deviceName == sessionUsbName) {
+                        Log.w(LogTag.USB, "the iPhone was unplugged")
+                        disconnect()
+                        set { it.copy(error = "The iPhone was unplugged. Plug it in again and connect.") }
+                    }
+                }
+            }
+        }
+    }
+
     private fun set(transform: (UiState) -> UiState) = _state.update { old ->
         val next = transform(old)
         when {
@@ -160,6 +190,12 @@ class AppController(private val app: SideloadApplication) : Controls {
     }
 
     init {
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        // Both are system broadcasts, which reach a not-exported receiver.
+        ContextCompat.registerReceiver(app, usbEvents, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         refreshDevices()
         if (app.settings.wifiDiscovery) app.discovery.startWifiDiscovery()
         scope.launch {
@@ -197,6 +233,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     fun connect(target: DiscoveredDevice): Action = run("Connecting to ${target.displayName}") {
         session?.close()
         session = null
+        sessionUsbName = null
         set { it.copy(connection = ConnectionState.CONNECTING, device = null, apps = emptyList(), transport = null) }
         val channel = when (target) {
             is DiscoveredDevice.Usb -> {
@@ -219,11 +256,13 @@ class AppController(private val app: SideloadApplication) : Controls {
 
         val opened = try {
             DeviceSession.open(channel, app.pairingStore)
-        } catch (error: java.io.IOException) {
-            channel.close()
+        } catch (error: Throwable) {
+            // Nothing owns the channel yet; close it so the USB interface is
+            // released and the next attempt can claim it.
+            runCatching { channel.close() }
             // A reset or an immediate close at the first request is how iOS 27
             // turns away lockdown over Wi-Fi, before any Trust prompt.
-            if (target is DiscoveredDevice.Wifi) {
+            if (target is DiscoveredDevice.Wifi && error is java.io.IOException) {
                 throw DeviceException(
                     operation = "connecting wirelessly",
                     reason = "the iPhone closed the lockdown connection at the first request",
@@ -237,6 +276,7 @@ class AppController(private val app: SideloadApplication) : Controls {
             throw error
         }
         session = opened
+        sessionUsbName = (target as? DiscoveredDevice.Usb)?.device?.deviceName
         set {
             it.copy(
                 connection = ConnectionState.LOCKDOWN_CONNECTED,
@@ -245,14 +285,26 @@ class AppController(private val app: SideloadApplication) : Controls {
             )
         }
 
-        opened.establish(onWaitingForTrust = {
-            set {
-                it.copy(
-                    connection = ConnectionState.PAIRING,
-                    pairingHint = "Unlock the iPhone and tap Trust, then enter its passcode."
-                )
+        try {
+            opened.establish(onWaitingForTrust = {
+                set {
+                    it.copy(
+                        connection = ConnectionState.PAIRING,
+                        pairingHint = "Unlock the iPhone and tap Trust, then enter its passcode."
+                    )
+                }
+            })
+        } catch (error: Throwable) {
+            // A session that never paired is no use; drop it so the screens do
+            // not keep showing "waiting for Trust" and a retry starts clean.
+            runCatching { opened.close() }
+            if (session === opened) {
+                session = null
+                sessionUsbName = null
             }
-        })
+            set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
+            throw error
+        }
         // Over USB, let the iPhone accept this phone over Wi-Fi from now on,
         // so later installs can be wireless.
         if (target is DiscoveredDevice.Usb) {
@@ -292,6 +344,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     override fun disconnect() {
         session?.close()
         session = null
+        sessionUsbName = null
         set {
             it.copy(
                 connection = ConnectionState.DISCONNECTED,
