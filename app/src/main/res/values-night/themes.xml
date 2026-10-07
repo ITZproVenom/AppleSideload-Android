@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Only what shows before Compose draws: the window behind it, in the
-         app's light background so starting up does not flash black. -->
-    <style name="Theme.AppleSideload" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.AppleSideload" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

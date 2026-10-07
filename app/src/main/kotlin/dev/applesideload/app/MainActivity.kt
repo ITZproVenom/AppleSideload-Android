@@ -167,7 +167,8 @@ class MainActivity : ComponentActivity() {
         AppScaffold(
             destination = destination,
             onNavigate = { destination = it },
-            busy = state.busy,
+            // The Install tab shows a running install in its own card.
+            busy = state.busy.takeUnless { destination == Destination.INSTALL && state.step != null },
             snackbar = snackbar,
             actions = {
                 if (destination == Destination.LOGS) {

@@ -4,11 +4,13 @@ import dev.applesideload.app.RemoteDeviceSummary
 import dev.applesideload.app.RemotePairingPrompt
 import dev.applesideload.app.SelectedIpa
 import dev.applesideload.app.SettingsSnapshot
+import dev.applesideload.app.TwoFactorPrompt
 import dev.applesideload.app.UiState
 import dev.applesideload.app.web.LanAddress
 import dev.applesideload.app.web.WebStatus
 import dev.applesideload.apple.AppleSession
 import dev.applesideload.apple.DeveloperTeam
+import dev.applesideload.apple.PendingAuth
 import dev.applesideload.core.LogLevel
 import dev.applesideload.core.LogLine
 import dev.applesideload.core.LogTag
@@ -46,19 +48,23 @@ object Fixtures {
 
     val team = DeveloperTeam("A1B2C3D4E5", "Alex Example (Personal Team)", "Individual", "active")
 
+    val teams = listOf(team, DeveloperTeam("F6G7H8J9K0", "Example Studio Ltd", "Company", "active"))
+
     val wifiDevice = DiscoveredDevice.Wifi(
         "a4:c3:f0:12:34:56@fe80::1c2b:3a4d:5e6f:7081._apple-mobdev2._tcp",
         InetAddress.getByName("192.168.1.23"),
         62078
     )
 
+    private const val DEVELOPER = "Apple Development: alex@example.com (A1B2C3D4E5)"
+    private const val APP_STORE = "Apple iPhone OS Application Signing"
+
     val apps = listOf(
-        InstalledApp("com.SideStore.SideStore.A1B2C3D4E5", "SideStore", "1", "0.6.2", "User", null, null, null,
-            System.currentTimeMillis() + 6 * 86_400_000L),
-        InstalledApp("com.kdt.livecontainer.A1B2C3D4E5", "LiveContainer", "1", "3.4.1", "User", null, null, null,
-            System.currentTimeMillis() + 6 * 86_400_000L),
-        InstalledApp("com.example.notes.A1B2C3D4E5", "Notes Plus", "12", "2.1", "User", null, null, null,
-            System.currentTimeMillis() + 2 * 86_400_000L)
+        InstalledApp("com.SideStore.SideStore.A1B2C3D4E5", "SideStore", "1", "0.6.2", "User", null, DEVELOPER, null),
+        InstalledApp("com.kdt.livecontainer.A1B2C3D4E5", "LiveContainer", "1", "3.4.1", "User", null, DEVELOPER, null),
+        InstalledApp("com.example.notes.A1B2C3D4E5", "Notes Plus", "12", "2.1", "User", null, DEVELOPER, null),
+        InstalledApp("com.burbn.instagram", "Instagram", "409", "409.0", "User", null, APP_STORE, null),
+        InstalledApp("com.spotify.client", "Spotify", "9.0.48", "9.0.48", "User", null, APP_STORE, null)
     )
 
     val ipa = SelectedIpa(
@@ -85,6 +91,29 @@ object Fixtures {
     val pairingPin = disconnected.copy(
         remotePairing = RemotePairingPrompt(RemotePairingPrompt.Stage.PIN, "AppleSideload (Pixel 8)", pin = "482913")
     )
+
+    val waitingForTrust = disconnected.copy(
+        connection = ConnectionState.PAIRING,
+        device = device,
+        transport = "USB",
+        pairingHint = "Unlock the iPhone and tap Trust, then enter its passcode."
+    )
+
+    val failed = disconnected.copy(
+        connection = ConnectionState.ERROR,
+        lastMessage = "Connecting to 192.168.1.40 over Wi-Fi failed: the Remote Pairing tunnel failed " +
+            "(nothing answered within 8 seconds), and lockdown over Wi-Fi failed too.",
+        lastMessageIsError = true
+    )
+
+    /** PendingAuth is internal to the apple module, so the test reaches its constructor directly. */
+    private fun pendingAuth(): PendingAuth {
+        val constructor = PendingAuth::class.java.declaredConstructors.single()
+        constructor.isAccessible = true
+        return constructor.newInstance("alex@example.com", "adsid", "token", ByteArray(0), "") as PendingAuth
+    }
+
+    val twoFactor = UiState(twoFactor = TwoFactorPrompt(pendingAuth()))
 
     val ready = UiState(
         connection = ConnectionState.READY,
