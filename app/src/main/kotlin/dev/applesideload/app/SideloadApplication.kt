@@ -7,6 +7,7 @@ import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.apple.RemoteAnisetteProvider
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
+import dev.applesideload.app.web.WebControl
 import dev.applesideload.device.DeviceDiscovery
 import dev.applesideload.device.PairingStore
 import dev.applesideload.sideload.IdentityStore
@@ -37,6 +38,10 @@ class Settings(context: Context) {
         get() = preferences.getString(KEY_WIRELESS, "") ?: ""
         set(value) = preferences.edit().putString(KEY_WIRELESS, value).apply()
 
+    var webPort: Int
+        get() = preferences.getInt(KEY_WEB_PORT, WebControl.DEFAULT_PORT)
+        set(value) = preferences.edit().putInt(KEY_WEB_PORT, value).apply()
+
     /** Stable identifier sent with anisette requests for this install. */
     val deviceId: String
         get() = preferences.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString()
@@ -48,6 +53,7 @@ class Settings(context: Context) {
         const val KEY_APPLE_ID = "apple_id"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_WIRELESS = "wireless_address"
+        const val KEY_WEB_PORT = "web_port"
     }
 }
 
@@ -62,6 +68,10 @@ class SideloadApplication : Application() {
         private set
     lateinit var discovery: DeviceDiscovery
         private set
+    lateinit var controller: AppController
+        private set
+    lateinit var webControl: WebControl
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -69,6 +79,8 @@ class SideloadApplication : Application() {
         pairingStore = PairingStore(this)
         identityStore = IdentityStore(this)
         discovery = DeviceDiscovery(this)
+        controller = AppController(this)
+        webControl = WebControl(this)
         Log.i(LogTag.APP, "AppleSideload started")
     }
 

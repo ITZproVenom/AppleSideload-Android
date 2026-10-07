@@ -44,6 +44,30 @@ The Android app only does the installing. As with SideInstaller, refreshing happ
 
 **Diagnostics** shows the tagged logs (`[USB] [USBMUX] [LOCKDOWN] [PAIR] [APPLE] [SIGN] [INSTALL]`), which are redacted when exported.
 
+## Web controller (LAN)
+
+Settings > Web controller starts a small web server inside the app (port 8686 by
+default, changeable). Open the address it shows in any browser on the same
+network and you get every feature of the app from there: device list and
+connect (wired USB and wireless by IP), Trust/pairing status, Apple ID sign-in
+with two-factor codes and SMS, team choice, certificate revoke, installing
+SideStore + LiveContainer or SideStore, uploading and installing a custom IPA
+with upload progress, the installed-apps list with remove, live logs with
+download, and the attestation and discovery settings.
+
+- It listens on every interface, so it is reachable over Wi-Fi, the phone's
+  hotspot, and USB or Ethernet tethering (wired). Settings lists each address.
+- It runs as a foreground service with a notification (address + Stop) and
+  holds a wake lock and Wi-Fi lock while on, so it keeps answering with the
+  screen off. Turn it off when you are done to save battery.
+- There is no login, by design: anyone on the same network who opens the page
+  can use it.
+- The phone and the browser share one state. Only one operation runs at a
+  time; asking for a second one while another is running is refused with the
+  name of the running one.
+- USB access is granted by Android itself: the first time a cable-connected
+  iPhone is used, tap Allow in the dialog on the Android phone.
+
 ## Building
 
 Requires JDK 17 and the Android SDK (platform 35).
