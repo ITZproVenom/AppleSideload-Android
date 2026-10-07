@@ -12,8 +12,12 @@ android {
         applicationId = "dev.applesideload.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI numbers its builds (build-N on the releases page). The version
+        // code follows that number, so each build installs over the last as
+        // an update; a local build is build 1.
+        val build = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.1.0 (build $build)"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

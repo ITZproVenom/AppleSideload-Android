@@ -4,6 +4,10 @@ import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
 import dev.applesideload.core.Plist
 import dev.applesideload.core.XmlPlist
+import dev.applesideload.device.remote.RemotePairingClient
+import dev.applesideload.device.remote.RemoteTunnel
+import dev.applesideload.device.remote.RpChannel
+import dev.applesideload.device.remote.RpPairingFile
 import java.io.Closeable
 
 /** Where the connection to the iPhone currently stands. */
@@ -74,6 +78,17 @@ class UsbChannel(private val transport: UsbTransport) : DeviceChannel {
     }
 }
 
+/**
+ * Wi-Fi through a Remote Pairing tunnel (iOS 17 and later, and the only
+ * wireless route on iOS 27). Services are opened by name through the tunnel
+ * rather than by asking lockdown for a port.
+ */
+class TunnelChannel(val tunnel: RemoteTunnel) : DeviceChannel {
+    override fun connect(port: Int): Transport = tunnel.connect(port)
+    override val description: String get() = tunnel.description
+    override fun close() = tunnel.close()
+}
+
 /** Wi-Fi: every connection is a plain TCP connection to the same host. */
 class WifiChannel(private val host: String) : DeviceChannel {
     override fun connect(port: Int): Transport = TcpTransport.connect(host, port)
@@ -99,6 +114,23 @@ class DeviceSession private constructor(
     var state: ConnectionState = ConnectionState.LOCKDOWN_CONNECTED
         private set
 
+    /** How the device is reached, for the screens: "USB", "Wi-Fi (...)" or the tunnel. */
+    val transportDescription: String get() = channel.description
+
+    /** True when this session runs through a Remote Pairing tunnel. */
+    val isTunnel: Boolean get() = channel is TunnelChannel
+
+    /** False once a tunnel session's tunnel has closed; a cable or lockdown session says true. */
+    val isAlive: Boolean get() = (channel as? TunnelChannel)?.tunnel?.isAlive ?: true
+
+    /**
+     * The Remote Pairing record for this iPhone, when this phone has one: it
+     * is what reaches the iPhone over Wi-Fi on iOS 17 and later, and what
+     * SideStore needs on iOS 27.
+     */
+    @Volatile
+    var remotePairing: RpPairingFile? = null
+
     /**
      * Pairs if needed and opens a session.
      *
@@ -107,6 +139,16 @@ class DeviceSession private constructor(
      * [timeoutMs] and reports exactly why it gave up.
      */
     fun establish(timeoutMs: Long = 60_000, onWaitingForTrust: () -> Unit = {}): Boolean {
+        if (isTunnel) {
+            // The tunnel itself was opened with pair-verify; there is no
+            // lockdown pairing or session to set up inside it.
+            state = ConnectionState.READY
+            Log.i(
+                LogTag.LOCKDOWN,
+                "${info.name} is ready through the Wi-Fi tunnel: ${info.productType} on iOS ${info.productVersion}"
+            )
+            return true
+        }
         val existing = record ?: store.load(info.udid)
         if (existing != null) {
             try {
@@ -183,6 +225,7 @@ class DeviceSession private constructor(
 
     /** Starts a service and returns a transport already wrapped in TLS if it asked for it. */
     fun openService(name: String): Transport {
+        (channel as? TunnelChannel)?.let { return it.tunnel.openService(RemoteTunnel.shimName(name)) }
         val descriptor = lockdown.startService(name)
         val transport = channel.connect(descriptor.port)
         if (!descriptor.requiresTls) return transport
@@ -231,6 +274,32 @@ class DeviceSession private constructor(
             .onFailure { Log.w(LogTag.LOCKDOWN, "could not enable Wi-Fi connections: ${it.message}") }
     }
 
+    /**
+     * Pairs this phone with the iPhone through Remote Pairing, over this
+     * (USB) session: remotepairingdeviced's lockdown service, the same
+     * conversation the iPhone has over Wi-Fi, and the consent prompt on the
+     * iPhone if it asks. An [existing] record the iPhone still accepts is
+     * kept as it is. The result reaches the iPhone over Wi-Fi from then on.
+     */
+    fun mintRemotePairing(identity: RpPairingFile, hostName: String, existing: RpPairingFile?): RpPairingFile {
+        check(!isTunnel) { "a tunnel session is already paired through Remote Pairing" }
+        val transport = openService(RemotePairingClient.LOCKDOWN_SERVICE)
+        RemotePairingClient(RpChannel(transport), hostName).use { client ->
+            client.handshake()
+            if (existing != null && client.verify(existing)) {
+                Log.i(LogTag.PAIR, "${info.name} still accepts this phone's Remote Pairing")
+                remotePairing = existing
+                return existing
+            }
+            // Over the cable the iPhone asks for consent and the PIN is fixed;
+            // the same default idevice uses if it asks for one anyway.
+            val peer = client.setup(identity) { RemotePairingClient.CABLE_PIN }
+            val record = identity.withDevice(peer).let { if (it.udid.isNullOrBlank()) it.copy(udid = info.udid) else it }
+            remotePairing = record
+            return record
+        }
+    }
+
     fun installationProxy(): InstallationProxyClient = InstallationProxyClient(
         PlistService(openService(InstallationProxyClient.SERVICE), "installation_proxy")
     )
@@ -239,8 +308,33 @@ class DeviceSession private constructor(
         PlistService(openService(MisagentClient.SERVICE), "misagent", sendBinary = false)
     )
 
+    @Volatile
+    private var heartbeat: Heartbeat? = null
+
+    /**
+     * Answers the iPhone's heartbeat for as long as this session is open,
+     * over Wi-Fi and through the tunnel: without it iOS closes the service
+     * connections of a host it hears nothing from. Over the cable usbmuxd
+     * does this, so it is not needed there. Never fatal: if the service will
+     * not start, the session goes on without it and says so in the log.
+     */
+    fun startHeartbeat() {
+        if (channel is UsbChannel || heartbeat != null) return
+        heartbeat = try {
+            Heartbeat.start(PlistService(openService(Heartbeat.SERVICE), "heartbeat", sendBinary = false), info.name)
+        } catch (error: Exception) {
+            Log.w(
+                LogTag.LOCKDOWN,
+                "the heartbeat service did not start (${Log.describe(error)}); the iPhone may close a long " +
+                    "Wi-Fi session"
+            )
+            null
+        }
+    }
+
     override fun close() {
         state = ConnectionState.DISCONNECTED
+        runCatching { heartbeat?.close() }
         runCatching { lockdown.close() }
         runCatching { channel.close() }
     }
@@ -255,7 +349,42 @@ class DeviceSession private constructor(
          */
         fun open(channel: DeviceChannel, store: PairingStore): DeviceSession {
             val lockdown = LockdownClient.open(channel.connect(TcpTransport.LOCKDOWN_PORT))
-            val info = DeviceInfo(
+            val info = try {
+                readInfo(lockdown)
+            } catch (error: Throwable) {
+                runCatching { lockdown.close() }
+                throw error
+            }
+            return DeviceSession(channel, store, lockdown, info, store.load(info.udid))
+        }
+
+        /**
+         * A session through a Remote Pairing tunnel, with lockdown reached as
+         * the tunnel's trusted lockdown service. A lockdown pairing record
+         * from an earlier cable connection is loaded too, for SideStore.
+         * Closes [tunnel] if it fails.
+         */
+        fun openRemote(tunnel: RemoteTunnel, store: PairingStore, remote: RpPairingFile): DeviceSession {
+            val channel = TunnelChannel(tunnel)
+            try {
+                val lockdown = LockdownClient.openTrusted(tunnel.openService(RemoteTunnel.LOCKDOWN))
+                val info = try {
+                    readInfo(lockdown)
+                } catch (error: Throwable) {
+                    runCatching { lockdown.close() }
+                    throw error
+                }
+                return DeviceSession(channel, store, lockdown, info, store.load(info.udid)).also {
+                    it.remotePairing = remote
+                }
+            } catch (error: Throwable) {
+                runCatching { channel.close() }
+                throw error
+            }
+        }
+
+        private fun readInfo(lockdown: LockdownClient): DeviceInfo {
+            return DeviceInfo(
                 udid = lockdown.udid ?: throw DeviceException(
                     operation = "identifying the device",
                     reason = "lockdown did not return a UniqueDeviceID"
@@ -269,7 +398,6 @@ class DeviceSession private constructor(
                 serialNumber = lockdown.stringValue("SerialNumber"),
                 wifiAddress = lockdown.stringValue("WiFiAddress")
             )
-            return DeviceSession(channel, store, lockdown, info, store.load(info.udid))
         }
     }
 }

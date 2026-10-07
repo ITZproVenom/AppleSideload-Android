@@ -2,6 +2,8 @@ package dev.applesideload.app.web
 
 import dev.applesideload.app.Action
 import dev.applesideload.app.Controls
+import dev.applesideload.app.RemoteDeviceSummary
+import dev.applesideload.app.RemotePairingPrompt
 import dev.applesideload.app.SettingsSnapshot
 import dev.applesideload.app.UiState
 import dev.applesideload.apple.AppleSession
@@ -55,6 +57,10 @@ private class RecordingControls : Controls {
     override fun refreshDevices() { calls += "refresh" }
     override fun connectById(id: String) = record("connect:$id")
     override fun connectWireless(address: String) = record("wireless:$address")
+    override fun startRemotePairing() = record("remote-start")
+    override fun stopRemotePairing() { calls += "remote-stop" }
+    override fun connectRemote(udid: String) = record("remote-connect:$udid")
+    override fun forgetRemote(udid: String) = record("remote-forget:$udid")
     override fun disconnect() { calls += "disconnect" }
     override fun loadApps() = record("apps")
     override fun uninstall(bundleId: String) = record("uninstall:$bundleId")
@@ -164,12 +170,42 @@ class WebApiTest {
     }
 
     @Test
+    fun remotePairingShowsThePinAndPairedIphonesButNoKeys() {
+        controls.mutableState.value = UiState(
+            remotePairing = RemotePairingPrompt(RemotePairingPrompt.Stage.PIN, "AppleSideload (Pixel 8)", pin = "482913"),
+            remoteDevices = listOf(RemoteDeviceSummary("00008130-001A2B3C", "Anna's iPhone", "iPhone17,1", "192.168.1.30"))
+        )
+        val json = call("GET", "/api/state").json
+        val prompt = json.getJSONObject("remotePairing")
+        assertEquals("PIN", prompt.getString("stage"))
+        assertEquals("482913", prompt.getString("pin"))
+        assertEquals("AppleSideload (Pixel 8)", prompt.getString("hostName"))
+        assertTrue(prompt.isNull("pairedWith"))
+        val paired = json.getJSONArray("remoteDevices").getJSONObject(0)
+        assertEquals("00008130-001A2B3C", paired.getString("udid"))
+        assertEquals("Anna's iPhone", paired.getString("name"))
+        assertEquals("192.168.1.30", paired.getString("lastAddress"))
+        assertEquals(setOf("udid", "name", "model", "lastAddress"), paired.keys().asSequence().toSet())
+
+        controls.mutableState.value = UiState()
+        val idle = call("GET", "/api/state").json
+        assertTrue(idle.isNull("remotePairing"))
+        assertEquals(0, idle.getJSONArray("remoteDevices").length())
+        assertEquals(400, post("/api/remote/connect", "{}").status)
+        assertEquals(400, post("/api/remote/forget", """{"udid":7}""").status)
+    }
+
+    @Test
     fun everyRouteReachesItsControl() {
         val routes = listOf(
             Triple("/api/devices/refresh", "{}", "refresh"),
             Triple("/api/connect", """{"id":"/dev/bus/usb/001/002"}""", "connect:/dev/bus/usb/001/002"),
             Triple("/api/connect-wireless", """{"address":" 192.168.1.23 "}""", "wireless:192.168.1.23"),
             Triple("/api/disconnect", "{}", "disconnect"),
+            Triple("/api/remote/start", "{}", "remote-start"),
+            Triple("/api/remote/stop", "{}", "remote-stop"),
+            Triple("/api/remote/connect", """{"udid":"00008130-001A2B3C"}""", "remote-connect:00008130-001A2B3C"),
+            Triple("/api/remote/forget", """{"udid":"00008130-001A2B3C"}""", "remote-forget:00008130-001A2B3C"),
             Triple("/api/apps/refresh", "{}", "apps"),
             Triple("/api/apps/uninstall", """{"bundleId":"com.example.App.TEAM"}""", "uninstall:com.example.App.TEAM"),
             Triple("/api/signin", """{"appleId":"me@example.com","password":" pa ss "}""", "signin:me@example.com: pa ss "),

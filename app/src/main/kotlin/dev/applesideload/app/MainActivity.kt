@@ -159,7 +159,11 @@ class MainActivity : ComponentActivity() {
                                     onRefresh = viewModel::refreshDevices,
                                     onConnect = viewModel::connect,
                                     onConnectWireless = viewModel::connectWireless,
-                                    onDisconnect = viewModel::disconnect
+                                    onDisconnect = viewModel::disconnect,
+                                    onStartRemotePairing = viewModel::startRemotePairing,
+                                    onStopRemotePairing = viewModel::stopRemotePairing,
+                                    onConnectRemote = viewModel::connectRemote,
+                                    onForgetRemote = viewModel::forgetRemote
                                 )
 
                                 Destination.DEVICE -> DeviceScreen(state)

@@ -13,7 +13,8 @@ import org.json.JSONObject
  * The app state as the browser sees it.
  *
  * Only what the page shows is sent: no tokens, keys, pairing records or
- * passwords ever leave the phone through this.
+ * passwords ever leave the phone through this. The Remote Pairing PIN is
+ * sent while it is on show, because the page shows it as the phone does.
  */
 object StateJson {
 
@@ -28,6 +29,25 @@ object StateJson {
         put("pairingHint", state.pairingHint.orNull())
         put("transport", state.transport.orNull())
         put("discovered", JSONArray().apply { state.discovered.forEach { put(device(it)) } })
+        put("remotePairing", state.remotePairing?.let { prompt ->
+            JSONObject().apply {
+                put("stage", prompt.stage.name)
+                put("hostName", prompt.hostName)
+                put("pin", prompt.pin.orNull())
+                put("message", prompt.message.orNull())
+                put("pairedWith", prompt.pairedWith.orNull())
+            }
+        }.orNull())
+        put("remoteDevices", JSONArray().apply {
+            state.remoteDevices.forEach { device ->
+                put(JSONObject().apply {
+                    put("udid", device.udid)
+                    put("name", device.name)
+                    put("model", device.model.orNull())
+                    put("lastAddress", device.lastAddress.orNull())
+                })
+            }
+        })
         put("device", state.device?.let { info ->
             JSONObject().apply {
                 put("name", info.name)

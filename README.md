@@ -10,6 +10,7 @@ It does the same job as AltStore, SideStore and SideInstaller, but the whole pip
 4. **Developer services**: team, device registration, free development certificate (the CSR is generated on the phone), App IDs and the provisioning profile.
 5. **Signing**: rewrites bundle identifiers, then signs every Mach-O (fat and thin) with SHA-1 + SHA-256 CodeDirectories, the CMS signature, the DER entitlements iOS 15+ requires, and `_CodeSignature/CodeResources`. Nested frameworks, plugins and watch apps are signed first.
 6. **Install**: uploads to `/PublicStaging` over AFC and installs through `installation_proxy`, showing live progress.
+7. **Remote Pairing (iOS 17 and later, the only wireless route on iOS 27)**: the phone offers itself as a pairable host over Bonjour (`_remotepairing-pairable-host._tcp`) with a PIN, or pairs over the cable through remotepairingd's lockdown service. Over Wi-Fi it then opens the CoreDevice tunnel (pair-verify, TLS-PSK, a userspace IPv6/TCP stack and RemoteServiceDiscovery) and reaches lockdown, AFC, house_arrest and installation_proxy through it.
 
 SideStore and LiveContainer IPAs are supported, including their app groups and nested bundles.
 
@@ -17,17 +18,18 @@ SideStore and LiveContainer IPAs are supported, including their app groups and n
 
 - **Anisette attestation.** Apple sign-in needs `X-Apple-I-MD` headers that only Apple's closed ADI code can produce. Like SideStore and SideInstaller, the app gets them by default from the public SideStore anisette server (`https://ani.sidestore.io`), using the live server list with a bundled fallback. You can enter your own server in Settings. Your Apple ID password is **never** sent to the anisette server; it goes only to Apple through SRP. On-device ADI isn't compiled in, and the app says so instead of pretending it works.
 - **Free Apple ID limits** (Apple's rules): apps expire after 7 days, at most 3 sideloaded apps at once, 10 App IDs per 7 days, and the free development certificates are limited. If Apple already holds a certificate whose private key is on another machine, the app explains this and offers to revoke it.
-- **iOS 17+**: install, AFC and pairing all work through lockdown. The first pairing needs the USB cable: wireless-only pairing (RemoteXPC / RPPairing) is not implemented. Developer-disk and debug services that need the RSD tunnel are not implemented either.
-- **Untested on hardware so far.** Every failure surfaces the operation, the iOS version, the technical reason, the limitation and whether a legitimate alternative exists. Copy the Diagnostics log when you report a problem.
+- **iOS 17+**: over the cable, install, AFC and pairing work through lockdown. Over Wi-Fi, an iPhone paired through Remote Pairing is reached through the CoreDevice tunnel; iOS 27 no longer answers lockdown over Wi-Fi at all, so there that is the only wireless route. Developer-disk and debug services (JIT) are not implemented.
+- **Untested on hardware so far.** The USB path has been run against a real iPhone through the user's own logs; Remote Pairing and the tunnel are tested against simulated iPhones and BouncyCastle's TLS only. Every failure surfaces the operation, the iOS version, the technical reason, the limitation and whether a legitimate alternative exists. Copy the Diagnostics log when you report a problem.
 
-No enterprise certificates, no manual `.p12` or `.mobileprovision` files, and no Developer Mode requirement.
+No enterprise certificates and no manual `.p12` or `.mobileprovision` files. Developer Mode is iOS's own requirement for any development-signed app since iOS 16.
 
 ## Using it
 
 The Android app only does the installing. As with SideInstaller, refreshing happens on the iPhone: SideStore re-signs itself, LiveContainer and your apps every day over LocalDevVPN, so you don't need this phone after setup.
 
-1. Connect the iPhone to the Android phone with a cable and allow USB access. You only need the cable to pair the first time. After that, wireless mode lets the iPhone be found and installed to over the same Wi-Fi.
-2. **Device**: connect, then tap *Trust* on the iPhone with it unlocked.
+1. Connect the iPhone to the Android phone with a cable and allow USB access. You only need the cable to pair the first time. On iOS 17 and later that also sets up Remote Pairing, so afterwards the iPhone can be reached over the same Wi-Fi.
+   - **No cable (iOS 27 included)**: tap *Pair wirelessly*, then on the iPhone open Settings › Privacy & Security › Developer Mode, pick this phone, and type the PIN the Android phone shows.
+2. **Device**: connect, then tap *Trust* on the iPhone with it unlocked (over the cable). An iPhone paired wirelessly is listed under *Paired iPhones* with *Connect*.
 3. **Account**: sign in with your Apple ID (two-factor is supported).
 4. **Install**: pick one of two options:
    - **SideStore + LiveContainer**: downloads the latest `LiveContainer+SideStore.ipa` from LiveContainer's GitHub releases (*SideStore only* is offered as well), or
@@ -39,7 +41,7 @@ The Android app only does the installing. As with SideInstaller, refreshing happ
 - Bundle IDs become `<original>.<TEAMID>`; every extension gets its own App ID; all of them share one app group (`group.com.SideStore.SideStore.<TEAMID>` for the LiveContainer build).
 - `ALTAppGroups`, `ALTCertificateID` and `ALTCertificate.p12` (protected with the certificate's machine id) are written into SideStore's bundle, so SideStore signs with the same certificate.
 - LiveContainer gets its `com.kdt.livecontainer.shared` keychain groups.
-- After installing, the lockdown pairing file is written into SideStore's container through house_arrest: `ALTPairingFile.mobiledevicepairing`, plus `PairingFile_Lockdown.plist` with `isPairingReset = false` and `activePairingProtocol = lockdown` for newer nightlies. Wireless lockdown (`EnableWifiDebugging`) is switched on, so SideStore can reach lockdownd over LocalDevVPN.
+- After installing, the pairing files are written into SideStore's container through house_arrest: `ALTPairingFile.mobiledevicepairing` for older builds, plus, for nightlies from September 2026, `PairingFile_Lockdown.plist` and (when this phone has a Remote Pairing record for the iPhone) `PairingFile_RemoteRP.plist`, with `isPairingReset = false`. `activePairingProtocol` is `lockdown`, except on iOS 27 or without a complete lockdown record, where it is `rppairing`: iOS 27's lockdownd resets connections that come through LocalDevVPN. Wireless lockdown (`EnableWifiDebugging`) is switched on as well.
 - `Account.sideconf` is not written: it needs a provisioned anisette v3 state that the V1 anisette servers don't give. SideStore asks you to sign in on first launch instead.
 
 **Diagnostics** shows the tagged logs (`[USB] [USBMUX] [LOCKDOWN] [PAIR] [APPLE] [SIGN] [INSTALL]`), which are redacted when exported.
@@ -49,7 +51,8 @@ The Android app only does the installing. As with SideInstaller, refreshing happ
 Settings > Web controller starts a small web server inside the app (port 8686 by
 default, changeable). Open the address it shows in any browser on the same
 network and you get every feature of the app from there: device list and
-connect (wired USB and wireless by IP), Trust/pairing status, Apple ID sign-in
+connect (wired USB, wireless by IP, and wireless pairing with the PIN shown in
+the page), Trust/pairing status, Apple ID sign-in
 with two-factor codes and SMS, team choice, certificate revoke, installing
 SideStore + LiveContainer or SideStore, uploading and installing a custom IPA
 with upload progress, the installed-apps list with remove, live logs with
@@ -80,6 +83,6 @@ The APK is written to `app/build/outputs/apk/release/`. CI (GitHub Actions) buil
 
 ## Modules
 
-`core` (logging, plists, binary plists) · `device` (USB, usbmux, TLS, lockdown, AFC, installation_proxy, misagent) · `apple` (SRP, anisette, GSA auth, developer services) · `signing` (Mach-O, CodeDirectory, CMS, CodeResources, IPA) · `sideload` (the engine) · `app` (Compose UI).
+`core` (logging, plists, binary plists) · `device` (USB, usbmux, TLS, lockdown, AFC, installation_proxy, misagent, Remote Pairing and the CoreDevice tunnel) · `apple` (SRP, anisette, GSA auth, developer services) · `signing` (Mach-O, CodeDirectory, CMS, CodeResources, IPA) · `sideload` (the engine) · `app` (Compose UI).
 
 See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for credits.

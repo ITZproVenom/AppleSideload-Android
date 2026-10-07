@@ -25,7 +25,10 @@ class LockdownClient private constructor(
     private var sessionId: String? = null
     private var secure = false
 
-    /** True once StartSession has upgraded this connection to TLS. */
+    /** Lockdown inside a Remote Pairing tunnel, where the tunnel is the session. */
+    private var tunneled = false
+
+    /** True once StartSession has upgraded this connection to TLS, or inside the encrypted tunnel. */
     val isSecure: Boolean get() = secure
 
     fun send(request: Plist.Dict): Plist {
@@ -159,6 +162,13 @@ class LockdownClient private constructor(
      * over USB, or a TCP connect over Wi-Fi.
      */
     fun startService(name: String): ServiceDescriptor {
+        if (tunneled) {
+            throw DeviceException(
+                operation = "starting $name",
+                reason = "lockdown inside the Wi-Fi tunnel does not start services",
+                limitation = "inside a Remote Pairing tunnel every service is opened through the tunnel by its RSD name"
+            )
+        }
         if (sessionId == null) {
             throw DeviceException(
                 operation = "starting $name",
@@ -249,6 +259,19 @@ class LockdownClient private constructor(
                     reason = "the service identified itself as \"$type\""
                 )
             }
+            return client
+        }
+
+        /**
+         * Lockdown inside a Remote Pairing tunnel: the RSD service
+         * `com.apple.mobile.lockdown.remote.trusted`, already checked in. The
+         * tunnel is both the pairing and the encryption, so there is no
+         * StartSession; values are read and written as they are over USB.
+         */
+        fun openTrusted(transport: Transport, label: String = "AppleSideload"): LockdownClient {
+            val client = open(transport, label)
+            client.secure = true
+            client.tunneled = true
             return client
         }
     }

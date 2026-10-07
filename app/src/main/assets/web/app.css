@@ -60,3 +60,6 @@ ol{margin:0;padding-left:20px;display:grid;gap:4px}
 .chips button.on{border-color:var(--accent);color:var(--accent);font-weight:600}
 label.check{display:flex;gap:10px;align-items:center}
 .card p{margin:0}
+.card h3{margin:4px 0 0;font-size:14px}
+.pairing{display:grid;gap:8px}
+.pin{font-size:34px;font-weight:700;letter-spacing:.3em;text-align:center;padding:10px 0 10px .3em;border:1px dashed var(--line);border-radius:10px;background:var(--bg)}

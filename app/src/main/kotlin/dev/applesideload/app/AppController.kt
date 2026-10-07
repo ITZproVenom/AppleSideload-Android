@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.ContextCompat
 import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.apple.AnisetteUnavailable
@@ -28,9 +29,12 @@ import dev.applesideload.device.DeviceInfo
 import dev.applesideload.device.DeviceSession
 import dev.applesideload.device.DiscoveredDevice
 import dev.applesideload.device.InstalledApp
+import dev.applesideload.device.RemotePairingNetwork
 import dev.applesideload.device.TcpTransport
 import dev.applesideload.device.UsbChannel
 import dev.applesideload.device.WifiChannel
+import dev.applesideload.device.remote.RemoteTunnel
+import dev.applesideload.device.remote.RpPairingFile
 import dev.applesideload.sideload.InstallOutcome
 import dev.applesideload.sideload.InstallSource
 import dev.applesideload.sideload.ReleaseDownloader
@@ -42,13 +46,16 @@ import dev.applesideload.signing.SigningException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 
 /** Everything the screens and the web controller draw from. */
 data class UiState(
@@ -76,7 +83,32 @@ data class UiState(
     val lastMessage: String? = null,
     val lastMessageIsError: Boolean = false,
     /** Bumped whenever a setting changes, so every view redraws it. */
-    val settingsRevision: Int = 0
+    val settingsRevision: Int = 0,
+    /** Set while this phone is offered to an iPhone for Remote Pairing, and after, until dismissed. */
+    val remotePairing: RemotePairingPrompt? = null,
+    /** iPhones paired with this phone through Remote Pairing (Wi-Fi on iOS 17 and later). */
+    val remoteDevices: List<RemoteDeviceSummary> = emptyList()
+)
+
+/** Where a wireless pairing stands, for the screens and the web page. */
+data class RemotePairingPrompt(
+    val stage: Stage,
+    /** The name the iPhone lists this phone under. */
+    val hostName: String,
+    /** The six digits to type on the iPhone, once it has asked for them. */
+    val pin: String? = null,
+    val message: String? = null,
+    val pairedWith: String? = null
+) {
+    enum class Stage { STARTING, ADVERTISING, PIN, PAIRED, FAILED }
+}
+
+/** A Remote Pairing record as the screens show it, without any of its keys. */
+data class RemoteDeviceSummary(
+    val udid: String,
+    val name: String,
+    val model: String?,
+    val lastAddress: String?
 )
 
 data class SelectedIpa(val file: File, val info: IpaInfo)
@@ -118,6 +150,10 @@ interface Controls {
     fun refreshDevices()
     fun connectById(id: String): Action
     fun connectWireless(address: String): Action
+    fun startRemotePairing(): Action
+    fun stopRemotePairing()
+    fun connectRemote(udid: String): Action
+    fun forgetRemote(udid: String): Action
     fun disconnect()
     fun loadApps(): Action
     fun uninstall(bundleId: String): Action
@@ -158,6 +194,9 @@ class AppController(private val app: SideloadApplication) : Controls {
     /** The USB device behind [session], so unplugging it can end the session. */
     @Volatile
     private var sessionUsbName: String? = null
+
+    /** Guards swapping [session] and [sessionUsbName] together. */
+    private val sessionLock = Any()
 
     /** Keeps the device list current as cables come and go, with or without a screen open. */
     private val usbEvents = object : BroadcastReceiver() {
@@ -205,6 +244,7 @@ class AppController(private val app: SideloadApplication) : Controls {
             val servers = AnisetteServers.fetchList()
             set { it.copy(anisetteServers = servers) }
         }
+        scope.launch(Dispatchers.IO) { refreshRemoteDevices() }
     }
 
     override fun settingsSnapshot() = SettingsSnapshot(
@@ -230,10 +270,14 @@ class AppController(private val app: SideloadApplication) : Controls {
         return connect(target)
     }
 
-    fun connect(target: DiscoveredDevice): Action = run("Connecting to ${target.displayName}") {
-        session?.close()
-        session = null
-        sessionUsbName = null
+    fun connect(target: DiscoveredDevice): Action = when (target) {
+        is DiscoveredDevice.Usb -> run("Connecting to ${target.displayName}") { openLockdown(target) }
+        is DiscoveredDevice.Wifi -> connectOverWifi(target)
+    }
+
+    /** Opens a lockdown session over USB or Wi-Fi, pairing it (Trust) when it has to. */
+    private suspend fun openLockdown(target: DiscoveredDevice) {
+        dropSession()
         set { it.copy(connection = ConnectionState.CONNECTING, device = null, apps = emptyList(), transport = null) }
         val channel = when (target) {
             is DiscoveredDevice.Usb -> {
@@ -262,21 +306,19 @@ class AppController(private val app: SideloadApplication) : Controls {
             runCatching { channel.close() }
             // A reset or an immediate close at the first request is how iOS 27
             // turns away lockdown over Wi-Fi, before any Trust prompt.
-            if (target is DiscoveredDevice.Wifi && error is java.io.IOException) {
+            if (target is DiscoveredDevice.Wifi && error is IOException) {
                 throw DeviceException(
                     operation = "connecting wirelessly",
                     reason = "the iPhone closed the lockdown connection at the first request",
-                    limitation = "newer iOS versions (iOS 27) no longer let lockdownd pair over Wi-Fi; " +
-                        "they only pair wirelessly through Remote Pairing, which this app does not " +
-                        "implement yet",
-                    alternative = "pair once over a USB cable; after that wireless mode works",
+                    limitation = "iOS 27 no longer lets lockdownd answer over Wi-Fi; there the iPhone is " +
+                        "reached wirelessly only through a Remote Pairing tunnel",
+                    alternative = PAIR_WIRELESSLY,
                     cause = error
                 )
             }
             throw error
         }
-        session = opened
-        sessionUsbName = (target as? DiscoveredDevice.Usb)?.device?.deviceName
+        adopt(opened, (target as? DiscoveredDevice.Usb)?.device?.deviceName)
         set {
             it.copy(
                 connection = ConnectionState.LOCKDOWN_CONNECTED,
@@ -298,18 +340,23 @@ class AppController(private val app: SideloadApplication) : Controls {
             // A session that never paired is no use; drop it so the screens do
             // not keep showing "waiting for Trust" and a retry starts clean.
             runCatching { opened.close() }
-            if (session === opened) {
-                session = null
-                sessionUsbName = null
-            }
+            release(opened)
             set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
             throw error
         }
-        // Over USB, let the iPhone accept this phone over Wi-Fi from now on,
-        // so later installs can be wireless.
         if (target is DiscoveredDevice.Usb) {
+            // Over USB, let the iPhone accept this phone over Wi-Fi from now on,
+            // so later installs can be wireless.
             runCatching { opened.enableWirelessLockdown() }
                 .onFailure { Log.w(LogTag.LOCKDOWN, "wireless mode could not be enabled: ${it.message}") }
+            // iOS 17 and later: pair through Remote Pairing over the cable as
+            // well, which is what reaches the iPhone over Wi-Fi without it
+            // (the only way on iOS 27) and what SideStore needs there.
+            if (opened.info.majorVersion >= REMOTE_PAIRING_FROM) mintRemotePairing(opened)
+        } else {
+            // Whatever this phone already holds for the iPhone, for SideStore.
+            opened.remotePairing = app.pairingStore.loadRemote(opened.info.udid)
+            opened.startHeartbeat()
         }
         set { it.copy(connection = opened.state, pairingHint = null, device = opened.info) }
         readApps()
@@ -318,10 +365,11 @@ class AppController(private val app: SideloadApplication) : Controls {
     /**
      * Wireless mode: connects to an iPhone by its Wi-Fi address, no cable.
      *
-     * lockdownd on the iPhone listens on the network as well, and as
-     * SideInstaller's Side by Side does, pairing runs straight against
-     * <address>:62078 - the iPhone shows the Trust prompt and everything after
-     * that, signing and installing included, goes over Wi-Fi.
+     * An iPhone paired with this phone through Remote Pairing (iOS 17 and
+     * later) is reached through its tunnel, which is the only way iOS 27
+     * allows. Otherwise, or if that fails, lockdownd on the iPhone is asked
+     * straight at <address>:62078, as SideInstaller's Side by Side does: the
+     * iPhone shows the Trust prompt and everything after that goes over Wi-Fi.
      */
     override fun connectWireless(address: String): Action {
         val trimmed = address.trim()
@@ -338,13 +386,40 @@ class AppController(private val app: SideloadApplication) : Controls {
         // A literal IPv4 address is parsed, never looked up, so this does not
         // touch the network on the calling thread.
         val host = InetAddress.getByName(trimmed)
-        return connect(DiscoveredDevice.Wifi(trimmed, host, TcpTransport.LOCKDOWN_PORT))
+        return connectOverWifi(DiscoveredDevice.Wifi(trimmed, host, TcpTransport.LOCKDOWN_PORT))
+    }
+
+    private fun connectOverWifi(target: DiscoveredDevice.Wifi): Action = run("Connecting to ${target.displayName}") {
+        val address = target.host.hostAddress
+        val records = app.pairingStore.remoteDevices()
+        if (address == null || records.isEmpty()) {
+            openLockdown(target)
+        } else {
+            try {
+                openRemoteAt(address, records)
+            } catch (tunnelError: DeviceException) {
+                // The iPhone at this address may not be one paired through
+                // Remote Pairing, and up to iOS 26 lockdown still answers
+                // over Wi-Fi. Report both if neither works.
+                Log.i(LogTag.TUNNEL, "no Remote Pairing tunnel at $address (${tunnelError.reason}); trying lockdown over Wi-Fi")
+                try {
+                    openLockdown(target)
+                } catch (lockdownError: DeviceException) {
+                    throw DeviceException(
+                        operation = "connecting to $address over Wi-Fi",
+                        reason = "the Remote Pairing tunnel failed (${tunnelError.reason}), and lockdown " +
+                            "over Wi-Fi failed too (${lockdownError.reason})",
+                        limitation = "an iPhone on iOS 27 is reached wirelessly only through Remote Pairing",
+                        alternative = PAIR_WIRELESSLY,
+                        cause = lockdownError
+                    )
+                }
+            }
+        }
     }
 
     override fun disconnect() {
-        session?.close()
-        session = null
-        sessionUsbName = null
+        dropSession()
         set {
             it.copy(
                 connection = ConnectionState.DISCONNECTED,
@@ -355,6 +430,401 @@ class AppController(private val app: SideloadApplication) : Controls {
             )
         }
     }
+
+    /** Closes the current session, if there is one, before another is opened. */
+    private fun dropSession() {
+        val old = synchronized(sessionLock) {
+            val current = session
+            session = null
+            sessionUsbName = null
+            current
+        }
+        old?.close()
+    }
+
+    private fun adopt(opened: DeviceSession, usbName: String?) = synchronized(sessionLock) {
+        session = opened
+        sessionUsbName = usbName
+    }
+
+    /** Forgets [expected] if it is still the current session, and says whether it was. */
+    private fun release(expected: DeviceSession): Boolean = synchronized(sessionLock) {
+        if (session !== expected) return false
+        session = null
+        sessionUsbName = null
+        true
+    }
+
+    // MARK: - Remote Pairing (Wi-Fi on iOS 17 and later; the only wireless way on iOS 27)
+
+    private val pairingLock = Any()
+
+    /** Guarded by [pairingLock], like [pairingGeneration]. */
+    private var advertisement: RemotePairingNetwork.Advertisement? = null
+
+    /** Bumped by every start and stop, so callbacks from an older offer are ignored. */
+    private var pairingGeneration = 0
+
+    /** The name the iPhone lists this phone under. */
+    private fun hostName(): String {
+        val model = Build.MODEL?.trim().orEmpty()
+        return if (model.isEmpty()) "AppleSideload" else "AppleSideload ($model)"
+    }
+
+    private fun isCurrentOffer(generation: Int) = synchronized(pairingLock) { generation == pairingGeneration }
+
+    override fun startRemotePairing(): Action {
+        val generation = synchronized(pairingLock) {
+            if (advertisement?.isOpen == true) return Action.Started
+            ++pairingGeneration
+        }
+        val name = hostName()
+        set { it.copy(remotePairing = RemotePairingPrompt(RemotePairingPrompt.Stage.STARTING, name)) }
+        scope.launch(Dispatchers.IO) {
+            val started = try {
+                app.remoteNetwork.advertise(name, pairingEvents(generation, name))
+            } catch (error: Exception) {
+                if (isCurrentOffer(generation)) {
+                    val message = error.message ?: "Android could not offer this phone for pairing"
+                    set {
+                        it.copy(
+                            remotePairing = RemotePairingPrompt(RemotePairingPrompt.Stage.FAILED, name, message = message),
+                            error = message
+                        )
+                    }
+                }
+                return@launch
+            }
+            val kept = synchronized(pairingLock) {
+                (generation == pairingGeneration && started.isOpen).also { if (it) advertisement = started }
+            }
+            if (!kept) {
+                started.close()
+                return@launch
+            }
+            // An open pairing listener is only needed while someone is pairing.
+            delay(PAIRING_OFFER_MS)
+            val expired = synchronized(pairingLock) {
+                (generation == pairingGeneration && advertisement === started).also { if (it) advertisement = null }
+            }
+            if (expired) {
+                started.close()
+                set {
+                    it.copy(
+                        remotePairing = it.remotePairing?.copy(
+                            stage = RemotePairingPrompt.Stage.FAILED,
+                            pin = null,
+                            message = "Stopped offering this phone after ${PAIRING_OFFER_MS / 60_000} minutes. " +
+                                "Tap Pair wirelessly to offer it again."
+                        )
+                    )
+                }
+            }
+        }
+        return Action.Started
+    }
+
+    private fun pairingEvents(generation: Int, name: String) = object : RemotePairingNetwork.PairingEvents {
+        override fun onAdvertised(serviceName: String) {
+            if (!isCurrentOffer(generation)) return
+            set {
+                it.copy(
+                    remotePairing = it.remotePairing?.copy(stage = RemotePairingPrompt.Stage.ADVERTISING, message = null)
+                )
+            }
+        }
+
+        override fun onPin(pin: String) {
+            if (!isCurrentOffer(generation)) return
+            set {
+                it.copy(
+                    remotePairing = it.remotePairing?.copy(stage = RemotePairingPrompt.Stage.PIN, pin = pin, message = null)
+                )
+            }
+        }
+
+        override fun onPaired(record: RpPairingFile, host: String?) {
+            // The record is stored by now, whichever offer it came through.
+            refreshRemoteDevices()
+            val current = synchronized(pairingLock) {
+                (generation == pairingGeneration).also { if (it) advertisement = null }
+            }
+            if (!current) return
+            val label = record.deviceName ?: "the iPhone"
+            val udid = record.udid
+            set {
+                it.copy(
+                    remotePairing = RemotePairingPrompt(RemotePairingPrompt.Stage.PAIRED, name, pairedWith = label),
+                    notice = "Paired with $label as \"$name\"."
+                )
+            }
+            if (udid == null || session != null) return
+            scope.launch(Dispatchers.IO) {
+                // The iPhone's tunnel listener can take a moment after pairing.
+                delay(1_500)
+                if (_state.value.busy == null && session == null) {
+                    run("Connecting to $label over Wi-Fi") { openRemote(udid, host) }
+                }
+            }
+        }
+
+        override fun onProblem(message: String, fatal: Boolean) {
+            val current = synchronized(pairingLock) {
+                (generation == pairingGeneration).also { if (it && fatal) advertisement = null }
+            }
+            if (!current) return
+            set {
+                it.copy(
+                    remotePairing = it.remotePairing?.copy(
+                        stage = if (fatal) RemotePairingPrompt.Stage.FAILED else RemotePairingPrompt.Stage.ADVERTISING,
+                        pin = null,
+                        message = message
+                    ),
+                    error = message
+                )
+            }
+        }
+    }
+
+    override fun stopRemotePairing() {
+        val running = synchronized(pairingLock) {
+            pairingGeneration++
+            advertisement.also { advertisement = null }
+        }
+        running?.close()
+        set { it.copy(remotePairing = null) }
+    }
+
+    override fun connectRemote(udid: String): Action {
+        val known = _state.value.remoteDevices.firstOrNull { it.udid == udid }
+            ?: return refuse("That iPhone is not paired with this phone any more. Pair it again.")
+        return run("Connecting to ${known.name} over Wi-Fi") { openRemote(udid, null) }
+    }
+
+    override fun forgetRemote(udid: String): Action {
+        val known = _state.value.remoteDevices.firstOrNull { it.udid == udid }
+            ?: return refuse("That iPhone is not in the list of paired iPhones.")
+        return run("Forgetting ${known.name}") {
+            app.pairingStore.forgetRemote(udid)
+            refreshRemoteDevices()
+            set {
+                it.copy(
+                    notice = "Forgot ${known.name}. The iPhone may still list this phone; Clear Trusted " +
+                        "Computers in its Settings > Developer removes it there."
+                )
+            }
+        }
+    }
+
+    private fun refreshRemoteDevices() {
+        val devices = app.pairingStore.remoteDevices().mapNotNull { record ->
+            val udid = record.udid ?: return@mapNotNull null
+            RemoteDeviceSummary(
+                udid = udid,
+                name = record.deviceName ?: "iPhone",
+                model = record.deviceModel,
+                lastAddress = app.pairingStore.remoteHost(udid)
+            )
+        }.sortedBy { it.name.lowercase() }
+        set { it.copy(remoteDevices = devices) }
+    }
+
+    /**
+     * A session through the Remote Pairing tunnel to [udid]'s iPhone, tried
+     * at [firstAddress] if given, then where its authenticated Bonjour
+     * advertisement says it is, then where it was last reached.
+     */
+    private fun openRemote(udid: String, firstAddress: String?) {
+        val record = app.pairingStore.loadRemote(udid) ?: throw DeviceException(
+            operation = "connecting wirelessly",
+            reason = "this phone has no readable Remote Pairing record for that iPhone",
+            alternative = PAIR_WIRELESSLY
+        )
+        val label = record.deviceName ?: "the iPhone"
+        val addresses = sequence {
+            firstAddress?.let { yield(it to RemoteTunnel.REMOTE_PAIRING_PORT) }
+            set { it.copy(pairingHint = "Looking for $label on the network") }
+            app.remoteNetwork.locate(record)?.let { found -> yield(addressOf(found) to found.port) }
+            app.pairingStore.remoteHost(udid)?.let { yield(it to RemoteTunnel.REMOTE_PAIRING_PORT) }
+        }.distinct()
+        openTunnelSession(label, listOf(record), addresses, expectedUdid = udid)
+    }
+
+    /** A session through the tunnel to whichever iPhone paired with this phone answers at [address]. */
+    private fun openRemoteAt(address: String, records: List<RpPairingFile>) {
+        // Every record this phone makes shares its identity, so one per
+        // identity is enough; the one last used here goes first.
+        val lastHere = records.filter { record -> record.udid?.let(app.pairingStore::remoteHost) == address }
+        val identities = (lastHere + records).distinctBy { it.identifier }
+        openTunnelSession(
+            label = "the iPhone at $address",
+            identities = identities,
+            addresses = sequenceOf(address to RemoteTunnel.REMOTE_PAIRING_PORT),
+            expectedUdid = null
+        )
+    }
+
+    /**
+     * Opens a tunnel at the first of [addresses] that accepts one of
+     * [identities] and makes a session through it the current one. An address
+     * that does not answer, an iPhone that does not know the identity, and,
+     * with [expectedUdid], a different iPhone than the one asked for, are each
+     * skipped, and reported if nothing else works.
+     */
+    private fun openTunnelSession(
+        label: String,
+        identities: List<RpPairingFile>,
+        addresses: Sequence<Pair<String, Int>>,
+        expectedUdid: String?
+    ) {
+        dropSession()
+        set {
+            it.copy(
+                connection = ConnectionState.CONNECTING, device = null, apps = emptyList(), transport = null,
+                pairingHint = "Connecting to $label"
+            )
+        }
+        val problems = mutableListOf<String>()
+        var unrecognisedAt: String? = null
+        try {
+            candidates@ for ((host, port) in addresses) {
+                for (identity in identities) {
+                    val tunnel = try {
+                        RemoteTunnel.open(host, identity, hostName(), port) { step -> set { it.copy(pairingHint = step) } }
+                    } catch (error: DeviceException) {
+                        Log.w(LogTag.TUNNEL, "no tunnel at $host: ${error.reason}")
+                        problems += "at $host, ${error.reason}"
+                        continue@candidates
+                    }
+                    if (tunnel == null) {
+                        Log.w(LogTag.TUNNEL, "the iPhone at $host does not accept this phone's pairing")
+                        unrecognisedAt = host
+                        continue
+                    }
+                    // openRemote closes the tunnel itself if it fails.
+                    val created = DeviceSession.openRemote(tunnel, app.pairingStore, identity)
+                    if (expectedUdid != null && created.info.udid != expectedUdid) {
+                        Log.w(LogTag.TUNNEL, "$host is ${created.info.name}, not $label")
+                        problems += "$host is ${created.info.name}, not $label"
+                        created.close()
+                        continue@candidates
+                    }
+                    adoptTunnelSession(created, identity, host)
+                    return
+                }
+            }
+        } catch (error: Throwable) {
+            set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
+            throw error
+        }
+        set { it.copy(connection = ConnectionState.ERROR, pairingHint = null, apps = emptyList()) }
+        val unrecognised = unrecognisedAt
+        throw when {
+            unrecognised != null && problems.isEmpty() -> DeviceException(
+                operation = "connecting to $label",
+                reason = "the iPhone at $unrecognised no longer accepts this phone's pairing",
+                limitation = "the pairing was removed on the iPhone, or the iPhone was reset",
+                alternative = PAIR_WIRELESSLY
+            )
+            unrecognised != null || problems.isNotEmpty() -> DeviceException(
+                operation = "connecting to $label over Wi-Fi",
+                reason = (listOfNotNull(unrecognised?.let { "the iPhone at $it no longer accepts this phone's pairing" }) +
+                    problems).joinToString("; "),
+                limitation = "the iPhone has to be unlocked and on the same Wi-Fi network as this phone",
+                alternative = "check the iPhone's address under Settings > Wi-Fi > (i) and enter it under Wireless mode"
+            )
+            else -> DeviceException(
+                operation = "finding $label",
+                reason = "it is not advertising Remote Pairing on this network, and no address is known for it",
+                limitation = "both phones have to be on the same Wi-Fi network, with the iPhone unlocked",
+                alternative = "enter the iPhone's address from Settings > Wi-Fi > (i) under Wireless mode"
+            )
+        }
+    }
+
+    private fun adoptTunnelSession(created: DeviceSession, identity: RpPairingFile, host: String) {
+        val udid = created.info.udid
+        // The record for this iPhone, under the identity that just opened it,
+        // with its current name; the iPhone's own key material is kept.
+        val known = app.pairingStore.loadRemote(udid)
+        val record = identity.copy(
+            udid = udid,
+            deviceAltIrk = known?.deviceAltIrk ?: identity.deviceAltIrk.takeIf { identity.udid == udid },
+            deviceName = created.info.name,
+            deviceModel = created.info.productType.ifBlank { null } ?: known?.deviceModel
+        )
+        created.remotePairing = record
+        created.establish()
+        created.startHeartbeat()
+        adopt(created, null)
+        runCatching { app.pairingStore.saveRemote(record, host) }
+            .onFailure { Log.w(LogTag.PAIR, "could not update the Remote Pairing record: ${it.message}") }
+        set {
+            it.copy(
+                connection = created.state,
+                device = created.info,
+                transport = created.transportDescription,
+                pairingHint = null
+            )
+        }
+        refreshRemoteDevices()
+        watchTunnel(created)
+        readApps()
+    }
+
+    /** Ends a tunnel session once its tunnel closes, the way unplugging ends a cable one. */
+    private fun watchTunnel(opened: DeviceSession) {
+        scope.launch(Dispatchers.IO) {
+            while (session === opened) {
+                delay(TUNNEL_CHECK_MS)
+                if (opened.isAlive) continue
+                if (release(opened)) {
+                    opened.close()
+                    Log.w(LogTag.TUNNEL, "the Wi-Fi tunnel to ${opened.info.name} closed")
+                    set {
+                        it.copy(
+                            connection = ConnectionState.DISCONNECTED,
+                            device = null,
+                            transport = null,
+                            pairingHint = null,
+                            apps = emptyList(),
+                            error = "The Wi-Fi connection to ${opened.info.name} closed. Connect again with " +
+                                "both phones on the same network and the iPhone unlocked."
+                        )
+                    }
+                }
+                return@launch
+            }
+        }
+    }
+
+    /**
+     * Pairs this phone with the iPhone through Remote Pairing over the cable
+     * too, so it can be reached over Wi-Fi later and SideStore gets the
+     * record iOS 27 needs. Never fatal: the cable session works without it.
+     */
+    private fun mintRemotePairing(opened: DeviceSession) {
+        val existing = app.pairingStore.loadRemote(opened.info.udid)
+        opened.remotePairing = existing
+        set { it.copy(pairingHint = "Setting up wireless access (Remote Pairing). If the iPhone asks, allow it.") }
+        try {
+            val record = opened.mintRemotePairing(app.pairingStore.remoteIdentity(), hostName(), existing)
+            if (record != existing) app.pairingStore.saveRemote(record, app.pairingStore.remoteHost(opened.info.udid))
+            refreshRemoteDevices()
+            Log.i(LogTag.PAIR, "${opened.info.name} can be reached over Wi-Fi through Remote Pairing")
+        } catch (error: Exception) {
+            opened.remotePairing = existing
+            Log.w(
+                LogTag.PAIR,
+                "Remote Pairing over the cable did not complete: ${Log.describe(error)}. The cable connection " +
+                    "is unaffected, and the iPhone can still pair from Settings > Privacy & Security > Developer Mode."
+            )
+        } finally {
+            set { it.copy(pairingHint = null) }
+        }
+    }
+
+    private fun addressOf(found: InetSocketAddress): String = found.address?.hostAddress ?: found.hostString
 
     override fun loadApps(): Action {
         // Asking with nothing connected is a mistake to point out, not a failure to log.
@@ -642,5 +1112,18 @@ class AppController(private val app: SideloadApplication) : Controls {
                 connection = if (error is DeviceException && session == null) ConnectionState.ERROR else it.connection
             )
         }
+    }
+
+    private companion object {
+        /** Remote Pairing, and with it the Wi-Fi tunnel, exists from iOS 17. */
+        const val REMOTE_PAIRING_FROM = 17
+
+        /** How long this phone stays offered for pairing when nobody pairs. */
+        const val PAIRING_OFFER_MS = 10 * 60_000L
+
+        const val TUNNEL_CHECK_MS = 3_000L
+
+        const val PAIR_WIRELESSLY = "tap Pair wirelessly, then on the iPhone open Settings > Privacy & " +
+            "Security > Developer Mode and pick this phone; or connect the iPhone once with a USB cable"
     }
 }
