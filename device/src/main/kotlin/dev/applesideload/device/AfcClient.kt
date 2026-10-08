@@ -227,17 +227,21 @@ class AfcClient(private val transport: Transport) : Closeable {
 
     private fun afcError(status: Long, operation: Long): DeviceException = DeviceException(
         operation = "an AFC request (operation $operation)",
+        // Status numbers are Apple's AFC error codes (the same ones
+        // libimobiledevice names), not errno values.
         reason = when (status) {
-            2L -> "the path does not exist on the device"
-            3L -> "the device refused: operation not permitted"
-            4L -> "the path is not a directory"
-            7L -> "the destination is not empty"
-            8L -> "the device is out of space"
+            7L -> "the device rejected the request as invalid (AFC error 7)"
+            8L -> "the path does not exist on the device"
+            9L -> "the path is a directory"
             10L -> "access was denied"
+            16L -> "the path already exists"
+            17L -> "the path is busy"
+            18L -> "the device is out of space"
+            33L -> "the folder is not empty"
             else -> "AFC returned error $status"
         },
-        limitation = if (status == 8L) "the iPhone does not have room for the app" else null,
-        alternative = if (status == 8L) "free space on the iPhone and try again" else null
+        limitation = if (status == 18L) "the iPhone does not have room for the app" else null,
+        alternative = if (status == 18L) "free space on the iPhone and try again" else null
     )
 
     private fun cstring(value: String): ByteArray = value.toByteArray() + 0

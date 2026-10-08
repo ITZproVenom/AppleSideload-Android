@@ -172,8 +172,8 @@ class SideloadEngine(
             val signedIpa = File(work.parentFile, "${work.name}.ipa")
             IpaPackage.pack(work, signedIpa)
 
-            upload(device, signedIpa, onStep)
-            installStaged(device, signedIpa.name, onStep)
+            val staged = upload(device, signedIpa, onStep)
+            installStaged(device, staged, onStep)
             signedIpa.delete()
 
             val handedOff = if (special == SpecialApp.SIDESTORE || special == SpecialApp.SIDESTORE_LIVECONTAINER) {
@@ -354,14 +354,26 @@ class SideloadEngine(
         }
     }
 
-    private fun upload(device: DeviceSession, signedIpa: File, onStep: (SideloadStep) -> Unit) {
+    /** Stages the IPA under a plain, fresh name and returns that name. */
+    private fun upload(device: DeviceSession, signedIpa: File, onStep: (SideloadStep) -> Unit): String {
         onStep(SideloadStep.Uploading(0))
+        // The IPA's own name can carry spaces or symbols AFC will not open, and
+        // an earlier attempt can leave a file or folder behind, so each upload
+        // gets its own simple name and old ones of ours are swept first.
+        val stagedName = "AppleSideload-${System.currentTimeMillis()}.ipa"
         device.afc().use { afc ->
             afc.makeDirectories(STAGING)
+            runCatching {
+                for (leftover in afc.listDirectory(STAGING)) {
+                    if (leftover.startsWith("AppleSideload-") || leftover == signedIpa.name) {
+                        afc.removeTree("$STAGING/$leftover")
+                    }
+                }
+            }
             val total = signedIpa.length()
             var last = -1
             signedIpa.inputStream().use { source ->
-                afc.writeFile("$STAGING/${signedIpa.name}", source, total) { written ->
+                afc.writeFile("$STAGING/$stagedName", source, total) { written ->
                     val percent = if (total > 0) ((written * 100) / total).toInt() else 0
                     if (percent != last) {
                         last = percent
@@ -370,6 +382,7 @@ class SideloadEngine(
                 }
             }
         }
+        return stagedName
     }
 
     private fun installStaged(device: DeviceSession, fileName: String, onStep: (SideloadStep) -> Unit) {
