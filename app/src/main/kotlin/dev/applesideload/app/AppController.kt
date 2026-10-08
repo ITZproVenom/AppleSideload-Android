@@ -991,6 +991,52 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
+    /**
+     * Puts the chosen IPA into LiveContainer's folder on the iPhone.
+     *
+     * LiveContainer shows that folder in Files under On My iPhone, and its
+     * "+" button imports from there. The app then runs inside LiveContainer
+     * and takes no sideload slot and no App ID of its own.
+     */
+    fun sendToLiveContainer(): Action {
+        if (session == null) return refuse("Connect and pair an iPhone first.")
+        val selected = _state.value.selectedIpa ?: return refuse("Choose an IPA first.")
+        return run("Sending ${selected.info.name} to LiveContainer") {
+            val active = requireSession("sending the IPA to LiveContainer")
+            val container = active.installationProxy().use { it.browse() }
+                .firstOrNull { it.bundleId.startsWith(LIVECONTAINER_BUNDLE_ID) }
+                ?: throw DeviceException(
+                    operation = "sending the IPA to LiveContainer",
+                    reason = "LiveContainer is not installed on ${active.info.name}",
+                    alternative = "install SideStore + LiveContainer from the Install tab first"
+                )
+            val fileName = selected.info.name.filter { it.isLetterOrDigit() || it in " ._-" }
+                .trim().ifBlank { "App" } + ".ipa"
+            val total = selected.file.length()
+            var last = -1
+            active.appContainer(container.bundleId, wholeContainer = true).use { afc ->
+                afc.makeDirectories("/Documents")
+                if (afc.exists("/Documents/$fileName")) afc.removeTree("/Documents/$fileName")
+                selected.file.inputStream().use { source ->
+                    afc.writeFile("/Documents/$fileName", source, total) { written ->
+                        val percent = if (total > 0) ((written * 100) / total).toInt().coerceIn(0, 100) else 0
+                        if (percent != last) {
+                            last = percent
+                            set { it.copy(step = SideloadStep.Uploading(percent)) }
+                        }
+                    }
+                }
+            }
+            set {
+                it.copy(
+                    step = null,
+                    notice = "Sent. In LiveContainer tap +, choose IPA files, then pick $fileName " +
+                        "under On My iPhone > LiveContainer."
+                )
+            }
+        }
+    }
+
     // MARK: - Installing
 
     /** Copies a file the user picked on this phone, then inspects it. */
@@ -1194,3 +1240,5 @@ class AppController(private val app: SideloadApplication) : Controls {
             "Security > Developer Mode and pick this phone; or connect the iPhone once with a USB cable"
     }
 }
+
+private const val LIVECONTAINER_BUNDLE_ID = "com.kdt.livecontainer"

@@ -212,7 +212,8 @@ class MainActivity : ComponentActivity() {
                     onInstallSource = viewModel::installSource,
                     onPickFile = { pickFile.launch(arrayOf("*/*")) },
                     onInstall = viewModel::install,
-                    onNavigate = { destination = it }
+                    onNavigate = { destination = it },
+                    onSendToLiveContainer = viewModel::sendToLiveContainer
                 )
 
                 Destination.APPS -> AppsScreen(

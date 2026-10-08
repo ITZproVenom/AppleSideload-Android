@@ -49,7 +49,8 @@ fun InstallScreen(
     onInstallSource: (InstallSource) -> Unit,
     onPickFile: () -> Unit,
     onInstall: () -> Unit,
-    onNavigate: (Destination) -> Unit
+    onNavigate: (Destination) -> Unit,
+    onSendToLiveContainer: () -> Unit = {}
 ) = ScreenColumn {
     val connected = state.connection == ConnectionState.READY
     val signedIn = state.account != null
@@ -63,7 +64,7 @@ fun InstallScreen(
     }
     if (!connected || !signedIn) ChecklistCard(state, connected, signedIn, onNavigate)
     SideStoreCard(ready, state.device?.takeIf { connected }?.majorVersion, onInstallSource)
-    CustomIpaCard(state, ready, onPickFile, onInstall)
+    CustomIpaCard(state, ready, connected, onPickFile, onInstall, onSendToLiveContainer)
     Hint(
         "A free Apple ID signs each app for 7 days, keeps up to 3 sideloaded apps on the iPhone " +
             "at a time, and can make 10 new app identifiers a week. Those limits are Apple's.",
@@ -236,7 +237,14 @@ private fun SideStoreCard(ready: Boolean, ios: Int?, onInstallSource: (InstallSo
     }
 
 @Composable
-private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit, onInstall: () -> Unit) =
+private fun CustomIpaCard(
+    state: UiState,
+    ready: Boolean,
+    connected: Boolean,
+    onPickFile: () -> Unit,
+    onInstall: () -> Unit,
+    onSendToLiveContainer: () -> Unit
+) =
     SectionCard("Your own IPA", icon = Icons.Filled.FolderOpen) {
         val idle = state.busy == null
         val selected = state.selectedIpa
@@ -298,6 +306,13 @@ private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit
             OutlinedButton(onClick = onPickFile, enabled = idle) { Text("Choose another") }
             Button(onClick = onInstall, enabled = ready) { Text("Sign & install") }
         }
+        OutlinedButton(onClick = onSendToLiveContainer, enabled = connected && idle) {
+            Text("Add to LiveContainer instead")
+        }
+        Hint(
+            "Sends the IPA into LiveContainer, which signs and runs it itself: no app slot and " +
+                "no App ID is used. Then open LiveContainer, tap +, and pick the file."
+        )
     }
 
 /** "2.1 (12)", or whichever half the app states. */

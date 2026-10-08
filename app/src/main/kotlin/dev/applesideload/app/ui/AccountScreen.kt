@@ -291,12 +291,12 @@ private fun AppIdsCard(
     SectionCard("App IDs", icon = Icons.Filled.Badge) {
         Text(
             "A free account can register 10 App IDs in 7 days, and an app with extensions uses " +
-                "one for each. You can delete the ones you no longer need.",
+                "one for each. This lists them and can delete the ones you no longer need.",
             style = MaterialTheme.typography.bodyMedium
         )
         Hint(
-            "Deleting an App ID stops the app that uses it from opening until it is installed " +
-                "again. Apple may still count it toward the 7-day limit."
+            "Deleting does not give the slot back: Apple keeps counting a deleted App ID until its " +
+                "week is up. It also stops the app that uses it from opening until it is installed again."
         )
         if (appIds == null) {
             OutlinedButton(onClick = onLoad, enabled = idle) { Text("Show App IDs") }
