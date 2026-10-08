@@ -894,9 +894,18 @@ class AppController(private val app: SideloadApplication) : Controls {
             } else {
                 auth.submitTrustedDeviceCode(prompt.pending, code.trim())
             }
-            if (result is AuthResult.Success) {
-                set { it.copy(twoFactor = null) }
-                finishSignIn(auth, result.session)
+            when (result) {
+                is AuthResult.Success -> {
+                    set { it.copy(twoFactor = null) }
+                    finishSignIn(auth, result.session)
+                }
+                // Apple can ask again after accepting a code (SideInstaller
+                // loops the same way), so the new request replaces the old.
+                is AuthResult.TrustedDeviceCodeRequired ->
+                    set { it.copy(twoFactor = TwoFactorPrompt(result.pending)) }
+
+                is AuthResult.PhoneCodeRequired ->
+                    set { it.copy(twoFactor = TwoFactorPrompt(result.pending, result.numbers)) }
             }
         }
     }

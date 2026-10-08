@@ -110,7 +110,7 @@ object Fixtures {
     private fun pendingAuth(): PendingAuth {
         val constructor = PendingAuth::class.java.declaredConstructors.single()
         constructor.isAccessible = true
-        return constructor.newInstance("alex@example.com", "adsid", "token", ByteArray(0), "") as PendingAuth
+        return constructor.newInstance("alex@example.com", "adsid", "token", "") as PendingAuth
     }
 
     val twoFactor = UiState(twoFactor = TwoFactorPrompt(pendingAuth()))

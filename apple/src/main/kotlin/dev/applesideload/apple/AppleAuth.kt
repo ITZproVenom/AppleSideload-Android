@@ -103,7 +103,9 @@ class AppleAuthException(
  */
 class AppleAuth(
     private val anisette: AnisetteProvider,
-    private val grandSlam: GrandSlam = GrandSlam()
+    private val grandSlam: GrandSlam = GrandSlam(),
+    /** Where the text-message code endpoints live; tests point it elsewhere. */
+    private val authUrl: String = AUTH
 ) {
 
     fun signIn(appleId: String, password: String): AuthResult {
@@ -303,7 +305,7 @@ class AppleAuth(
     fun trustedPhoneNumbers(pending: PendingAuth): List<TrustedPhoneNumber> {
         val data = anisette.fetch()
         val response = try {
-            grandSlam.send(AUTH, headers = twoFactorHeaders(pending, data), json = true)
+            grandSlam.send(authUrl, headers = twoFactorHeaders(pending, data), json = true)
         } catch (error: IOException) {
             Log.w(LogTag.APPLE, "the trusted phone numbers could not be loaded: ${error.message}")
             return emptyList()
@@ -333,7 +335,7 @@ class AppleAuth(
             .put("mode", "sms")
             .toString()
         val response = grandSlam.send(
-            "$AUTH/verify/phone",
+            "$authUrl/verify/phone",
             method = "PUT",
             headers = twoFactorHeaders(pending, data),
             body = body.toByteArray(),
@@ -369,7 +371,7 @@ class AppleAuth(
             .put("mode", "sms")
             .toString()
         val response = grandSlam.send(
-            "$AUTH/verify/phone/securitycode",
+            "$authUrl/verify/phone/securitycode",
             method = "POST",
             headers = twoFactorHeaders(pending, data),
             body = body.toByteArray(),

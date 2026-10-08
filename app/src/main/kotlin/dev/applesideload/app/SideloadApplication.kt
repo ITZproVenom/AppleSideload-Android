@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import dev.applesideload.apple.AnisetteProvider
 import dev.applesideload.apple.AnisetteServers
+import dev.applesideload.apple.FileAnisetteStore
 import dev.applesideload.apple.RemoteAnisetteProvider
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
@@ -12,6 +13,7 @@ import dev.applesideload.device.DeviceDiscovery
 import dev.applesideload.device.PairingStore
 import dev.applesideload.device.RemotePairingNetwork
 import dev.applesideload.sideload.IdentityStore
+import java.io.File
 import java.util.UUID
 
 /** Settings that survive a restart, kept deliberately small. */
@@ -104,6 +106,9 @@ class SideloadApplication : Application() {
     /** Built fresh so a changed address in Settings takes effect at once. */
     fun anisetteProvider(): AnisetteProvider = RemoteAnisetteProvider(
         baseUrl = settings.effectiveAnisetteAddress,
-        deviceId = settings.deviceId
+        deviceId = settings.deviceId,
+        // This phone's own v3 identity, kept so Apple keeps seeing one
+        // machine and a two factor code is not asked for every time.
+        store = FileAnisetteStore(File(filesDir, "anisette-identity.properties"))
     )
 }
