@@ -89,7 +89,9 @@ data class UiState(
     /** Set while this phone is offered to an iPhone for Remote Pairing, and after, until dismissed. */
     val remotePairing: RemotePairingPrompt? = null,
     /** iPhones paired with this phone through Remote Pairing (Wi-Fi on iOS 17 and later). */
-    val remoteDevices: List<RemoteDeviceSummary> = emptyList()
+    val remoteDevices: List<RemoteDeviceSummary> = emptyList(),
+    /** The team's App IDs once read from Apple; null until then. */
+    val appIds: List<dev.applesideload.apple.DeveloperAppId>? = null
 )
 
 /** Where a wireless pairing stands, for the screens and the web page. */
@@ -958,6 +960,34 @@ class AppController(private val app: SideloadApplication) : Controls {
             }
             app.identityStore.clearSigningIdentity()
             set { it.copy(notice = "The certificate was revoked. Apps signed with it will no longer launch.") }
+        }
+    }
+
+    /** Reads the App IDs registered on the selected team. */
+    fun loadAppIds(): Action {
+        val account = _state.value.account ?: return refuse("Sign in first.")
+        val team = _state.value.selectedTeam ?: return refuse("Select a team first.")
+        return run("Reading the App IDs") {
+            val developer = DeveloperSession(account, app.anisetteProvider(), AppleAuth(app.anisetteProvider()))
+            val ids = developer.listAppIds(team.teamId)
+            set { it.copy(appIds = ids) }
+        }
+    }
+
+    /** Deletes one App ID from the team, then reads the list again. */
+    fun deleteAppId(appIdId: String): Action {
+        val account = _state.value.account ?: return refuse("Sign in first.")
+        val team = _state.value.selectedTeam ?: return refuse("Select a team first.")
+        return run("Deleting the App ID") {
+            val developer = DeveloperSession(account, app.anisetteProvider(), AppleAuth(app.anisetteProvider()))
+            developer.deleteAppId(team.teamId, appIdId)
+            val ids = developer.listAppIds(team.teamId)
+            set {
+                it.copy(
+                    appIds = ids,
+                    notice = "The App ID was deleted. The app that used it will not launch until it is installed again."
+                )
+            }
         }
     }
 
