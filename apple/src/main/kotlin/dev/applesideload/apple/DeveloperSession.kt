@@ -153,15 +153,41 @@ class DeveloperSession(
         )
         val request = reply["certRequest"]
             ?: throw DeveloperServiceException(0, "Apple returned no certificate")
-        return DeveloperCertificate(
-            certificateId = request["certificateId"]?.asString.orEmpty(),
-            serialNumber = request["serialNumber"]?.asString.orEmpty(),
-            name = request["name"]?.asString.orEmpty(),
-            machineName = machineName,
-            data = request["certContent"]?.asData
-                ?: throw DeveloperServiceException(0, "the signed certificate was empty"),
-            machineId = request["machineId"]?.asString ?: machineId
-        )
+        // Apple's reply to the request is only a receipt: ids and a serial
+        // number. The signed certificate itself is fetched afterwards from the
+        // certificate list, the way AltSign and isideload do it. Some replies
+        // do carry the content, so it is used when it is there.
+        val requestId = request["certificateId"]?.asString
+            ?: request["certRequestId"]?.asString
+        val requestSerial = request["serialNumber"]?.asString
+            ?: request["serialNum"]?.asString
+        val inline = request["certContent"]?.asData
+        if (inline != null) {
+            return DeveloperCertificate(
+                certificateId = requestId.orEmpty(),
+                serialNumber = requestSerial.orEmpty(),
+                name = request["name"]?.asString.orEmpty(),
+                machineName = machineName,
+                data = inline,
+                machineId = request["machineId"]?.asString ?: machineId
+            )
+        }
+        fun normal(serial: String?) = serial?.trim()?.trimStart('0')?.uppercase().orEmpty()
+        var found: DeveloperCertificate? = null
+        for (attempt in 1..6) {
+            val listed = listCertificates(teamId)
+            found = listed.firstOrNull { !requestId.isNullOrEmpty() && it.certificateId == requestId }
+                ?: listed.firstOrNull {
+                    normal(requestSerial).isNotEmpty() && normal(it.serialNumber) == normal(requestSerial)
+                }
+                ?: listed.firstOrNull { it.machineId.equals(machineId, ignoreCase = true) }
+            if (found != null) break
+            // Apple can take a moment to publish a certificate it just signed.
+            Thread.sleep(1500L)
+        }
+        val issued = found
+        return issued?.copy(machineName = issued.machineName ?: machineName, machineId = issued.machineId ?: machineId)
+            ?: throw DeveloperServiceException(0, "Apple signed the certificate but it did not appear in the certificate list")
     }
 
     fun revokeCertificate(teamId: String, serialNumber: String) {
