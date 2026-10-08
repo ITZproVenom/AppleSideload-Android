@@ -6,7 +6,21 @@ as `build-<number>`. The build number is also the app's version code, so each
 build installs over the previous one. The *Unreleased* section becomes the
 notes of the next release.
 
-## Unreleased: Apple sign-in fixed
+## Unreleased: anonymous log collection
+
+- A new switch, **Send anonymous logs** (Settings › Troubleshooting, and in
+  the web controller's Settings), on by default. While it is on, new Activity
+  log lines go to the developer's server shortly after the app goes quiet, so
+  problems can be fixed without asking you for a copy of the log.
+- What is sent: the log lines, the app build, the Android version and device
+  model, and a random ID made for this install (shown under the switch).
+  Passwords, codes, tokens, keys, Apple IDs, serial numbers and the names of
+  iPhones and teams are removed first. Lines written while the switch is off
+  are never sent.
+- The server only accepts new entries: the key in the app cannot read,
+  change or delete anything. Entries are deleted after 30 days.
+
+## build-30: Apple sign-in fixed
 
 ### Apple sign-in
 - Signing in to an Apple ID always failed. Apple's sign-in server answers the

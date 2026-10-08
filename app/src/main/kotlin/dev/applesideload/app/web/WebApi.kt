@@ -223,6 +223,14 @@ class WebApi(
             }
             onMain.call { controls.setWifiDiscovery(enabled) }
         }
+        if (fields.has("shareLogs")) {
+            val enabled = try {
+                fields.getBoolean("shareLogs")
+            } catch (_: JSONException) {
+                throw HttpError(400, "shareLogs must be true or false.")
+            }
+            onMain.call { controls.setShareLogs(enabled) }
+        }
         return ok()
     }
 
