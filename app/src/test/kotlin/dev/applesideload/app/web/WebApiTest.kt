@@ -76,6 +76,7 @@ private class RecordingControls : Controls {
     override fun install() = record("install")
     override fun setAnisetteAddress(address: String) { anisette = address; calls += "anisette:$address" }
     override fun setWifiDiscovery(enabled: Boolean) { wifi = enabled; calls += "wifi:$enabled" }
+    override fun setShareLogs(enabled: Boolean) { calls += "logs:$enabled" }
     override fun exportLogs() = "exported log"
 }
 

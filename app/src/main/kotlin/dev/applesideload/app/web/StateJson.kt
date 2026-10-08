@@ -130,6 +130,9 @@ object StateJson {
             put("wifiDiscovery", settings.wifiDiscovery)
             put("lastAppleId", settings.lastAppleId)
             put("lastWirelessAddress", settings.lastWirelessAddress)
+            put("shareLogs", settings.shareLogs)
+            put("logsId", settings.logsId)
+            put("logsStatus", settings.logsStatus)
         })
     }
 

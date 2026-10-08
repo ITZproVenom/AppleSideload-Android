@@ -1,6 +1,7 @@
 package dev.applesideload.app
 
 import android.content.BroadcastReceiver
+import dev.applesideload.core.PersonalData
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -133,7 +134,11 @@ data class SettingsSnapshot(
     val effectiveAnisetteAddress: String,
     val wifiDiscovery: Boolean,
     val lastAppleId: String,
-    val lastWirelessAddress: String
+    val lastWirelessAddress: String,
+    val shareLogs: Boolean = true,
+    /** The start of this install's anonymous log ID, to tell its logs apart. */
+    val logsId: String = "",
+    val logsStatus: String = ""
 )
 
 /**
@@ -170,6 +175,7 @@ interface Controls {
     fun install(): Action
     fun setAnisetteAddress(address: String)
     fun setWifiDiscovery(enabled: Boolean)
+    fun setShareLogs(enabled: Boolean)
     fun exportLogs(): String
 }
 
@@ -219,15 +225,27 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
-    private fun set(transform: (UiState) -> UiState) = _state.update { old ->
-        val next = transform(old)
-        when {
-            next.error != null && next.error != old.error ->
-                next.copy(messageSerial = old.messageSerial + 1, lastMessage = next.error, lastMessageIsError = true)
-            next.notice != null && next.notice != old.notice ->
-                next.copy(messageSerial = old.messageSerial + 1, lastMessage = next.notice, lastMessageIsError = false)
-            else -> next
+    private fun set(transform: (UiState) -> UiState) {
+        _state.update { old ->
+            val next = transform(old)
+            when {
+                next.error != null && next.error != old.error ->
+                    next.copy(messageSerial = old.messageSerial + 1, lastMessage = next.error, lastMessageIsError = true)
+                next.notice != null && next.notice != old.notice ->
+                    next.copy(messageSerial = old.messageSerial + 1, lastMessage = next.notice, lastMessageIsError = false)
+                else -> next
+            }
         }
+        rememberNames(_state.value)
+    }
+
+    /** Names that reach the screen are left out of the anonymous logs (see [LogUploader]). */
+    private fun rememberNames(state: UiState) {
+        state.device?.name?.let { PersonalData.remember(it, IPHONE_NAME) }
+        state.discovered.forEach { PersonalData.remember(it.displayName, IPHONE_NAME) }
+        state.remoteDevices.forEach { PersonalData.remember(it.name, IPHONE_NAME) }
+        state.account?.appleId?.let { PersonalData.remember(it, APPLE_ID) }
+        state.teams.forEach { PersonalData.rememberTeam(it.name, it.teamId) }
     }
 
     init {
@@ -254,7 +272,10 @@ class AppController(private val app: SideloadApplication) : Controls {
         effectiveAnisetteAddress = app.settings.effectiveAnisetteAddress,
         wifiDiscovery = app.settings.wifiDiscovery,
         lastAppleId = app.settings.lastAppleId,
-        lastWirelessAddress = app.settings.lastWirelessAddress
+        lastWirelessAddress = app.settings.lastWirelessAddress,
+        shareLogs = app.settings.shareLogs,
+        logsId = app.settings.logsId.take(8),
+        logsStatus = app.logUploader.status.value
     )
 
     override fun dismissMessages() = set { it.copy(error = null, notice = null) }
@@ -870,6 +891,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     override fun signIn(appleId: String, password: String): Action {
         if (appleId.isBlank() || password.isEmpty()) return refuse("Enter both the Apple ID and the password.")
         return run("Signing in to Apple") {
+            PersonalData.remember(appleId.trim(), APPLE_ID)
             app.settings.lastAppleId = appleId.trim()
             set { it.copy(twoFactor = null, settingsRevision = it.settingsRevision + 1) }
             val auth = AppleAuth(app.anisetteProvider())
@@ -1090,6 +1112,11 @@ class AppController(private val app: SideloadApplication) : Controls {
         set { it.copy(settingsRevision = it.settingsRevision + 1, discovered = app.discovery.devices.value) }
     }
 
+    override fun setShareLogs(enabled: Boolean) {
+        app.settings.shareLogs = enabled
+        set { it.copy(settingsRevision = it.settingsRevision + 1) }
+    }
+
     override fun exportLogs(): String = Log.export()
 
     // MARK: - Plumbing
@@ -1152,6 +1179,8 @@ class AppController(private val app: SideloadApplication) : Controls {
     }
 
     private companion object {
+        const val IPHONE_NAME = "[iPhone name]"
+        const val APPLE_ID = "[apple-id]"
         /** Remote Pairing, and with it the Wi-Fi tunnel, exists from iOS 17. */
         const val REMOTE_PAIRING_FROM = 17
 

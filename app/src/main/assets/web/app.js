@@ -440,12 +440,15 @@
   }
 
   // Settings
-  let anisetteInput, wifiCheck;
+  let anisetteInput, wifiCheck, logsCheck;
   function buildSettings() {
     anisetteInput = h("input", { type: "text", placeholder: "https://ani.sidestore.io", "aria-label": "Attestation address" });
     dyn.chips = h("div", { class: "chips" });
     wifiCheck = h("input", { type: "checkbox" });
     wifiCheck.addEventListener("change", () => act("/api/settings", { wifiDiscovery: wifiCheck.checked }));
+    logsCheck = h("input", { type: "checkbox" });
+    logsCheck.addEventListener("change", () => act("/api/settings", { shareLogs: logsCheck.checked }));
+    dyn.logsNote = h("p", { class: "muted" });
     const save = () => act("/api/settings", { anisetteAddress: anisetteInput.value.trim() }).then((ok) => { if (ok) toast("Attestation source saved."); });
     views.Settings.append(
       h("div", { class: "card" }, h("h2", { text: "Attestation source" }),
@@ -455,6 +458,10 @@
       h("div", { class: "card" }, h("h2", { text: "Discovery" }),
         h("label", { class: "check" }, wifiCheck, h("span", { text: "Look for iPhones over Wi-Fi" })),
         h("p", { class: "muted", text: "Only iPhones already paired with this app and with Wi-Fi sync on advertise themselves." })),
+      h("div", { class: "card" }, h("h2", { text: "Anonymous logs" }),
+        h("label", { class: "check" }, logsCheck, h("span", { text: "Send anonymous logs" })),
+        h("p", { class: "muted", text: "On by default. Sends the Activity log to the developer so problems can be fixed, without passwords, codes, tokens, keys, Apple IDs, serial numbers or the names of iPhones and teams." }),
+        dyn.logsNote),
       h("div", { class: "card" }, h("h2", { text: "Web controller" }),
         h("p", { class: "muted", text: "To stop the web controller, turn it off under Settings > Web controller in the app or tap Stop in its notification." })));
   }
@@ -463,6 +470,8 @@
     const st = state.settings;
     if (!anisettePrefilled) { anisetteInput.value = st.anisetteAddress; anisettePrefilled = true; }
     if (document.activeElement !== wifiCheck) wifiCheck.checked = st.wifiDiscovery;
+    if (document.activeElement !== logsCheck) logsCheck.checked = st.shareLogs;
+    dyn.logsNote.textContent = "Anonymous ID " + st.logsId + ". " + st.logsStatus;
     fill(dyn.chips, ...state.anisetteServers.map((srv) =>
       h("button", { class: srv.address === st.effectiveAnisetteAddress ? "on" : "", text: srv.name, title: srv.address,
         onclick: () => { anisetteInput.value = srv.address; act("/api/settings", { anisetteAddress: srv.address }); } })));

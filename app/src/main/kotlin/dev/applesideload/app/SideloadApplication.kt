@@ -2,6 +2,7 @@ package dev.applesideload.app
 
 import android.app.Application
 import android.content.Context
+import androidx.core.content.pm.PackageInfoCompat
 import dev.applesideload.apple.AnisetteProvider
 import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.apple.FileAnisetteStore
@@ -13,6 +14,9 @@ import dev.applesideload.device.DeviceDiscovery
 import dev.applesideload.device.PairingStore
 import dev.applesideload.device.RemotePairingNetwork
 import dev.applesideload.sideload.IdentityStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import java.io.File
 import java.util.UUID
 
@@ -55,6 +59,17 @@ class Settings(context: Context) {
         get() = preferences.getBoolean(KEY_ASKED_NOTIFICATIONS, false)
         set(value) = preferences.edit().putBoolean(KEY_ASKED_NOTIFICATIONS, value).apply()
 
+    /** Anonymous log collection (see [LogUploader]): on until the user turns it off. */
+    var shareLogs: Boolean
+        get() = preferences.getBoolean(KEY_SHARE_LOGS, true)
+        set(value) = preferences.edit().putBoolean(KEY_SHARE_LOGS, value).apply()
+
+    /** A random ID for this install's logs alone, unrelated to anything else the app sends. */
+    @get:Synchronized
+    val logsId: String
+        get() = preferences.getString(KEY_LOGS_ID, null) ?: UUID.randomUUID().toString()
+            .also { preferences.edit().putString(KEY_LOGS_ID, it).apply() }
+
     /** Stable identifier sent with anisette requests for this install. */
     val deviceId: String
         get() = preferences.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString()
@@ -69,6 +84,8 @@ class Settings(context: Context) {
         const val KEY_WEB_PORT = "web_port"
         const val KEY_WEB_ENABLED = "web_enabled"
         const val KEY_ASKED_NOTIFICATIONS = "asked_notifications"
+        const val KEY_SHARE_LOGS = "share_logs"
+        const val KEY_LOGS_ID = "logs_id"
     }
 }
 
@@ -90,6 +107,10 @@ class SideloadApplication : Application() {
         private set
     lateinit var webControl: WebControl
         private set
+    lateinit var logUploader: LogUploader
+        private set
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -98,10 +119,17 @@ class SideloadApplication : Application() {
         identityStore = IdentityStore(this)
         discovery = DeviceDiscovery(this)
         remoteNetwork = RemotePairingNetwork(this, pairingStore)
+        logUploader = LogUploader(settings, appBuild())
         controller = AppController(this)
         webControl = WebControl(this)
         Log.i(LogTag.APP, "AppleSideload started")
+        logUploader.start(appScope)
     }
+
+    private fun appBuild(): Long = runCatching {
+        @Suppress("DEPRECATION")
+        PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0))
+    }.getOrDefault(0L)
 
     /** Built fresh so a changed address in Settings takes effect at once. */
     fun anisetteProvider(): AnisetteProvider = RemoteAnisetteProvider(

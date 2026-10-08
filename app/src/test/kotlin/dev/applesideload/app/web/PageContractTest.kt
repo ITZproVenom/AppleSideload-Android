@@ -46,6 +46,7 @@ class PageContractTest {
             override fun install() = Action.Started
             override fun setAnisetteAddress(address: String) = Unit
             override fun setWifiDiscovery(enabled: Boolean) = Unit
+            override fun setShareLogs(enabled: Boolean) = Unit
             override fun exportLogs() = ""
         },
         asset = { name -> File(assets, name).takeIf { it.isFile }?.readBytes() },

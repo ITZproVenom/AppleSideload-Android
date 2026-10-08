@@ -235,14 +235,17 @@ class MainActivity : ComponentActivity() {
 
                 Destination.SETTINGS -> {
                     val logs by viewModel.logs.collectAsState()
+                    val logsStatus by sideload.logUploader.status.collectAsState()
                     SettingsScreen(
                         state = state,
                         settings = settings,
                         web = web,
                         logLines = logs.size,
                         version = version,
+                        logsStatus = logsStatus,
                         onAnisetteAddress = viewModel::setAnisetteAddress,
                         onWifiDiscovery = viewModel::setWifiDiscovery,
+                        onShareLogs = viewModel::setShareLogs,
                         onWebEnabled = { enabled ->
                             if (enabled) startWebControl() else WebControlService.stop(this@MainActivity)
                         },

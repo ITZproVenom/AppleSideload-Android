@@ -44,8 +44,10 @@ fun SettingsScreen(
     web: WebStatus,
     logLines: Int,
     version: String,
+    logsStatus: String,
     onAnisetteAddress: (String) -> Unit,
     onWifiDiscovery: (Boolean) -> Unit,
+    onShareLogs: (Boolean) -> Unit,
     onWebEnabled: (Boolean) -> Unit,
     onWebPort: (Int) -> Unit,
     onNavigate: (Destination) -> Unit
@@ -62,6 +64,14 @@ fun SettingsScreen(
         )
     }
     SectionCard("Troubleshooting", icon = Icons.Filled.BugReport) {
+        SwitchRow(
+            title = "Send anonymous logs",
+            checked = settings.shareLogs,
+            onCheckedChange = onShareLogs,
+            subtitle = "On by default. Sends the Activity log to the developer so problems can be " +
+                "fixed, without passwords, codes, tokens, keys, Apple IDs, serial numbers or the " +
+                "names of iPhones and teams. Anonymous ID ${settings.logsId}. $logsStatus"
+        )
         NavigationRow(
             title = "Activity log",
             subtitle = if (logLines == 1) "1 line" else "$logLines lines",
