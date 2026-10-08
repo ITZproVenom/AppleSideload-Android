@@ -30,52 +30,25 @@ data class AnisetteData(
     val oneTimePassword: String,
     /** X-Apple-I-MD-M: the machine token from provisioning. */
     val machineId: String,
-    /** X-Apple-I-MD-RINFO: routing info, 17106176 for a provisioned client. */
+    /** X-Apple-I-MD-RINFO: routing info, sent with two factor requests. */
     val routingInfo: String,
-    /** X-Mme-Device-Id: the device identifier the session was provisioned for. */
+    /** X-Mme-Device-Id: the device identifier the data belongs to. */
     val deviceId: String,
-    /** X-Apple-I-MD-LU: the local user hash. */
-    val localUserId: String,
-    val deviceSerial: String = "0",
     /**
-     * The clock the one-time password was generated against.
-     *
-     * Apple checks this against the token, so the source's own time has to
-     * be used rather than the phone's. A few seconds of drift is the usual
-     * cause of a sign-in that fails with no useful error.
+     * Headers a v1 source adds to its shared data (local user, clock,
+     * locale). A v3 identity needs none of them, as in SideInstaller.
      */
-    val clientTime: String,
-    val timeZone: String,
-    val locale: String,
-    /**
-     * X-MMe-Client-Info: the Apple client the data is presented as.
-     *
-     * It has to be one Apple still accepts: since autumn 2026 Grand Slam
-     * answers a sign-in that claims to be Xcode 11 with HTTP 503. Sources
-     * publish the one their data belongs to, and that is what is sent.
-     */
-    val clientInfo: String = DEFAULT_CLIENT_INFO,
-    /** The User-Agent that goes with [clientInfo]. */
-    val userAgent: String = DEFAULT_USER_AGENT
+    val extraHeaders: Map<String, String> = emptyMap()
 ) {
-    companion object {
-        /** What anisette v3 sources publish today (GET /v3/client_info). */
-        const val DEFAULT_CLIENT_INFO =
-            "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-        const val DEFAULT_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
-    }
-
-    fun headers(): Map<String, String> = mapOf(
-        "X-Apple-I-MD" to oneTimePassword,
-        "X-Apple-I-MD-M" to machineId,
-        "X-Apple-I-MD-RINFO" to routingInfo,
-        "X-Apple-I-MD-LU" to localUserId,
+    /** The attestation headers for a Grand Slam or developer request (isideload's get_headers). */
+    fun headers(): Map<String, String> = linkedMapOf(
         "X-Mme-Device-Id" to deviceId,
-        "X-Apple-I-SRL-NO" to deviceSerial,
-        "X-Apple-I-Client-Time" to clientTime,
-        "X-Apple-I-TimeZone" to timeZone,
-        "X-Apple-Locale" to locale
-    )
+        "X-Apple-I-MD" to oneTimePassword,
+        "X-Apple-I-MD-M" to machineId
+    ).apply { putAll(extraHeaders) }
+
+    /** The tokens stay out of logs. */
+    override fun toString(): String = "AnisetteData(deviceId=$deviceId)"
 }
 
 /**
@@ -221,17 +194,20 @@ class AnisetteIdentity(val identifier: ByteArray, val adiPb: String) {
         require(adiPb.isNotBlank()) { "the provisioning data is empty" }
     }
 
-    /** X-Mme-Device-Id, derived from the identifier so a new identity is a new device. */
+    /**
+     * X-Mme-Device-Id: the identifier as a UUID, in lower case exactly as
+     * isideload writes it (Uuid::from_bytes(identifier).to_string()).
+     */
     val deviceId: String
         get() {
             val buffer = ByteBuffer.wrap(identifier)
-            return UUID(buffer.long, buffer.long).toString().uppercase()
+            return UUID(buffer.long, buffer.long).toString()
         }
 
-    /** X-Apple-I-MD-LU: SHA-256 of the identifier, as other v3 clients send it. */
+    /** X-Apple-I-MD-LU: SHA-256 of the identifier in lower-case hex, as isideload sends it. */
     val localUserId: String
         get() = MessageDigest.getInstance("SHA-256").digest(identifier)
-            .joinToString("") { "%02X".format(it) }
+            .joinToString("") { "%02x".format(it) }
 
     val identifierBase64: String get() = java.util.Base64.getEncoder().encodeToString(identifier)
 }
@@ -309,7 +285,7 @@ class RemoteAnisetteProvider(
     private val deviceId: String = UUID.randomUUID().toString().uppercase(),
     private val http: Http = Http(),
     private val store: AnisetteStore = MemoryAnisetteStore(),
-    private val lookupUrl: String = APPLE_LOOKUP
+    private val grandSlam: GrandSlam = GrandSlam(http)
 ) : AnisetteProvider {
 
     override val name: String = "anisette source at $baseUrl"
@@ -326,15 +302,18 @@ class RemoteAnisetteProvider(
                 alternative = "enter an address in Settings"
             )
         }
-        val client = clientInfo()
-        return if (client != null) fetchV3(client) else fetchV1()
+        return if (speaksV3()) fetchV3() else fetchV1()
     }
 
-    private class ClientInfo(val clientInfo: String, val userAgent: String)
-
-    /** The source's v3 client description, or null when it only speaks v1. */
-    private fun clientInfo(): ClientInfo? {
-        KNOWN[base]?.let { return it as? ClientInfo }
+    /**
+     * Whether the source has the v3 interface.
+     *
+     * Only the answer's presence matters: the client description a source
+     * publishes is not used, because public sources still describe Xcode,
+     * which Apple now refuses (see [GrandSlam.CLIENT_INFO]).
+     */
+    private fun speaksV3(): Boolean {
+        KNOWN[base]?.let { return it }
         val response = try {
             http.request("$base/v3/client_info", headers = mapOf("Accept" to "application/json"))
         } catch (error: IOException) {
@@ -343,35 +322,33 @@ class RemoteAnisetteProvider(
         if (response.code >= 500) {
             // A v3 source that is failing right now, not one without v3.
             throw AnisetteUnavailable(
-                detail = "the source answered HTTP ${response.code}",
+                detail = "the source answered HTTP ${response.code} (${response.reason})",
                 limitation = "the source is having trouble of its own",
                 alternative = "try again in a while, or pick another anisette source in Settings"
             )
         }
         val json = if (response.code in 200..299) runCatching { JSONObject(response.text) }.getOrNull() else null
-        val description = json?.optString("client_info").orEmpty()
-        if (description.isBlank()) {
-            Log.i(LogTag.APPLE, "the anisette source has no v3 interface, so its shared v1 data is used")
-            KNOWN[base] = V1_ONLY
-            return null
-        }
-        val info = ClientInfo(
-            clientInfo = description,
-            userAgent = json?.optString("user_agent").orEmpty().ifBlank { AnisetteData.DEFAULT_USER_AGENT }
-        )
-        KNOWN[base] = info
-        return info
+        val v3 = !json?.optString("client_info").isNullOrBlank()
+        if (!v3) Log.i(LogTag.APPLE, "the anisette source has no v3 interface, so its shared v1 data is used")
+        KNOWN[base] = v3
+        return v3
     }
 
-    private fun fetchV3(client: ClientInfo): AnisetteData = synchronized(LOCK) {
-        var identity = store.load() ?: provision(client)
+    private fun fetchV3(): AnisetteData = synchronized(LOCK) {
+        var identity = store.load() ?: provision()
+        CACHE[base]?.let { cached ->
+            // isideload keeps one answer for 60 seconds; a sign-in makes several requests.
+            if (cached.data.deviceId == identity.deviceId && System.nanoTime() - cached.madeAt < CACHE_NANOS) {
+                return cached.data
+            }
+        }
         var reply = headersFor(identity)
         if (reply is HeadersReply.Refused) {
             // Usually provisioning data the source can no longer use; a new
             // identity fixes that, at the price of one more two factor code.
             Log.w(LogTag.APPLE, "the anisette source refused this phone's identity (${reply.message}); making a new one")
             store.clear()
-            identity = provision(client)
+            identity = provision()
             reply = headersFor(identity)
         }
         when (reply) {
@@ -386,15 +363,8 @@ class RemoteAnisetteProvider(
                     oneTimePassword = reply.oneTimePassword,
                     machineId = reply.machineId,
                     routingInfo = reply.routingInfo,
-                    deviceId = identity.deviceId,
-                    localUserId = identity.localUserId,
-                    deviceSerial = "0",
-                    clientTime = IsoDate.now(),
-                    timeZone = "UTC",
-                    locale = "en_US",
-                    clientInfo = client.clientInfo,
-                    userAgent = client.userAgent
-                )
+                    deviceId = identity.deviceId
+                ).also { CACHE[base] = Cached(it, System.nanoTime()) }
             }
         }
     }
@@ -420,7 +390,7 @@ class RemoteAnisetteProvider(
             throw unreachable(error)
         }
         val json = runCatching { JSONObject(response.text) }.getOrNull() ?: throw AnisetteUnavailable(
-            detail = "the source answered HTTP ${response.code} without the expected JSON",
+            detail = "the source answered HTTP ${response.code} (${response.reason}) without the expected JSON",
             limitation = "a v3 source answers /v3/get_headers with a JSON object",
             alternative = "check the address in Settings"
         )
@@ -443,25 +413,21 @@ class RemoteAnisetteProvider(
      * Makes a new identity: Apple's provisioning, relayed through the source.
      *
      * The source runs Apple's ADI code and says what it needs; this side
-     * talks to Apple's two provisioning endpoints itself and passes the
-     * answers back. Nothing about the Apple account is involved.
+     * talks to Apple's two provisioning endpoints itself (addresses from the
+     * URL bag, Grand Slam's headers plus the new identity's two) and passes
+     * the answers back, as isideload's remote_v3 does. Nothing about the
+     * Apple account is involved.
      */
-    private fun provision(client: ClientInfo): AnisetteIdentity {
+    private fun provision(): AnisetteIdentity {
         Log.i(LogTag.APPLE, "setting up this phone's own attestation identity with Apple, through $base")
         val identifier = ByteArray(16).also(SecureRandom()::nextBytes)
         val draft = DraftIdentity(identifier)
         val headers = mapOf(
-            "User-Agent" to client.userAgent,
-            "X-Mme-Client-Info" to client.clientInfo,
-            "Accept" to "*/*",
-            "X-Mme-Device-Id" to draft.deviceId,
             "X-Apple-I-MD-LU" to draft.localUserId,
-            "X-Apple-I-SRL-NO" to "0",
-            "X-Apple-I-Client-Time" to IsoDate.now(),
-            "X-Apple-I-TimeZone" to "UTC",
-            "X-Apple-Locale" to "en_US"
+            "X-Mme-Device-Id" to draft.deviceId
         )
-        val (startUrl, finishUrl) = provisioningUrls(headers)
+        val startUrl = appleUrl("midStartProvisioning")
+        val finishUrl = appleUrl("midFinishProvisioning")
         val socketUrl = when {
             base.startsWith("https://", ignoreCase = true) -> "wss://" + base.substring(8)
             base.startsWith("http://", ignoreCase = true) -> "ws://" + base.substring(7)
@@ -553,26 +519,23 @@ class RemoteAnisetteProvider(
         val identifierBase64 = shape.identifierBase64
     }
 
-    private fun provisioningUrls(headers: Map<String, String>): Pair<String, String> {
-        val urls = runCatching {
-            val response = http.request(lookupUrl, headers = headers)
-            if (response.code !in 200..299) null else dev.applesideload.core.PlistReader.parse(response.body)["urls"]
-        }.getOrNull()
-        return (urls?.get("midStartProvisioning")?.asString ?: APPLE_START) to
-            (urls?.get("midFinishProvisioning")?.asString ?: APPLE_FINISH)
+    private fun appleUrl(key: String): String = try {
+        grandSlam.url(key)
+    } catch (error: IOException) {
+        throw provisioningFailed("Apple's URL bag could not be read: ${error.message}")
     }
 
     private fun appleProvisioning(url: String, request: Map<String, Plist>, headers: Map<String, String>): Plist {
-        val reply = try {
-            http.plist(
+        val response = try {
+            grandSlam.plistRequest(
                 url = url,
-                request = Plist.dict("Header" to Plist.Dict(emptyMap()), "Request" to Plist.Dict(request)),
-                headers = headers
+                body = Plist.dict("Header" to Plist.Dict(emptyMap()), "Request" to Plist.Dict(request)),
+                headers = headers,
+                retry429 = false
             )
         } catch (error: IOException) {
             throw provisioningFailed("Apple's provisioning service: ${error.message}")
         }
-        val response = reply["Response"] ?: reply
         val status = response["Status"]
         val code = status?.get("ec")?.asInt ?: 0
         if (code != 0) {
@@ -620,32 +583,32 @@ class RemoteAnisetteProvider(
             )
         }
         Log.i(LogTag.APPLE, "attestation data came from the configured source (v1, the source's shared identity)")
+        val extras = linkedMapOf<String, String>()
+        field("X-Apple-I-MD-LU", "local_user_id")?.let { extras["X-Apple-I-MD-LU"] = it }
+        extras["X-Apple-I-SRL-NO"] = field("X-Apple-I-SRL-NO", "device_serial") ?: "0"
+        extras["X-Apple-I-Client-Time"] = field("X-Apple-I-Client-Time", "client_time") ?: IsoDate.now()
+        extras["X-Apple-I-TimeZone"] = field("X-Apple-I-TimeZone", "time_zone") ?: "UTC"
+        extras["X-Apple-Locale"] = field("X-Apple-Locale", "locale") ?: "en_US"
         return AnisetteData(
             oneTimePassword = otp,
             machineId = machine,
             routingInfo = field("X-Apple-I-MD-RINFO", "routing_info") ?: "17106176",
             deviceId = field("X-Mme-Device-Id", "device_id") ?: deviceId,
-            localUserId = field("X-Apple-I-MD-LU", "local_user_id")
-                ?: deviceId.uppercase().take(64),
-            deviceSerial = field("X-Apple-I-SRL-NO", "device_serial") ?: "0",
-            clientTime = field("X-Apple-I-Client-Time", "client_time") ?: IsoDate.now(),
-            timeZone = field("X-Apple-I-TimeZone", "time_zone") ?: "UTC",
-            locale = field("X-Apple-Locale", "locale") ?: "en_US",
-            clientInfo = field("X-MMe-Client-Info", "X-Mme-Client-Info", "client_info")
-                ?: AnisetteData.DEFAULT_CLIENT_INFO
+            extraHeaders = extras
         )
     }
 
-    companion object {
-        const val APPLE_LOOKUP = "https://gsa.apple.com/grandslam/GsService2/lookup"
-        private const val APPLE_START = "https://gsa.apple.com/grandslam/MidService/startMachineProvisioning"
-        private const val APPLE_FINISH = "https://gsa.apple.com/grandslam/MidService/finishMachineProvisioning"
+    private class Cached(val data: AnisetteData, val madeAt: Long)
 
+    companion object {
         /** One identity is made at a time, however many sign-in steps ask at once. */
         private val LOCK = Any()
 
         /** What each source address turned out to speak, for this process. */
-        private val KNOWN = ConcurrentHashMap<String, Any>()
-        private val V1_ONLY = Any()
+        private val KNOWN = ConcurrentHashMap<String, Boolean>()
+
+        /** The last v3 answer per source, reused for up to a minute. */
+        private val CACHE = ConcurrentHashMap<String, Cached>()
+        private const val CACHE_NANOS = 60_000_000_000L
     }
 }

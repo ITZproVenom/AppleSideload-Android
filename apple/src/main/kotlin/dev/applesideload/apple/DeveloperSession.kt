@@ -3,7 +3,6 @@ package dev.applesideload.apple
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
 import dev.applesideload.core.Plist
-import java.util.Locale
 import java.util.UUID
 
 data class DeveloperTeam(
@@ -303,21 +302,18 @@ class DeveloperSession(
             "clientId" to Plist.Str(CLIENT_ID),
             "protocolVersion" to Plist.Str(PROTOCOL),
             "requestId" to Plist.Str(UUID.randomUUID().toString().uppercase()),
-            "userLocale" to Plist.Arr(listOf(Plist.Str(Locale.getDefault().toLanguageTag())))
+            "userLocale" to Plist.Arr(listOf(Plist.Str("en_US")))
         )
         teamId?.let { fields["teamId"] = Plist.Str(it) }
         fields.putAll(parameters)
 
+        // As isideload's developer session: Grand Slam's base headers, the
+        // attestation headers, and the account's developer token.
         val data = anisette.fetch()
-        val headers = buildMap {
-            put("Content-Type", "text/x-xml-plist")
-            put("Accept", "text/x-xml-plist")
-            put("User-Agent", "Xcode")
-            put("X-Apple-I-Identity-Id", session.adsid)
-            put("X-Apple-GS-Token", token)
-            put("X-Mme-Client-Info", CLIENT_INFO)
-            putAll(data.headers())
-        }
+        val headers = GrandSlam.baseHeaders() + data.headers() + mapOf(
+            "X-Apple-GS-Token" to token,
+            "X-Apple-I-Identity-Id" to session.adsid
+        )
 
         val reply = http.plist(
             url = "$BASE$action?clientId=$CLIENT_ID",
@@ -372,7 +368,5 @@ class DeveloperSession(
         const val CLIENT_ID = "XABBG36SBA"
         const val PROTOCOL = "QH65B2"
         const val FEATURE_APP_GROUPS = "APG3427HIY"
-        const val CLIENT_INFO =
-            "<MacBookPro13,2> <Mac OS X;10.15.2;19C57> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>"
     }
 }
