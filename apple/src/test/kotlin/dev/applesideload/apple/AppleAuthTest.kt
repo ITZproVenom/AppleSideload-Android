@@ -1,7 +1,5 @@
 package dev.applesideload.apple
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import dev.applesideload.core.Plist
 import dev.applesideload.core.PlistReader
 import dev.applesideload.core.XmlPlist
@@ -15,7 +13,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.math.BigInteger
-import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -58,7 +55,7 @@ class AppleAuthTest {
         private val verifier: BigInteger
         private var b = BigInteger.ONE
         private var serverB = BigInteger.ONE
-        private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        private val server: TestHttpServer
         val base: String
 
         init {
@@ -69,21 +66,13 @@ class AppleAuthTest {
             val p = (generator.generateDerivedParameters(256) as KeyParameter).key
             val x = BigInteger(1, sha256(salt + sha256(":".toByteArray() + p)))
             verifier = G.modPow(x, N)
-            server.createContext("/") { exchange ->
-                try {
-                    handle(exchange)
-                } catch (error: Throwable) {
-                    error.printStackTrace()
-                    reply(exchange, 500, "text/plain", "fake failed: $error".toByteArray())
-                }
-            }
-            server.start()
-            base = "http://127.0.0.1:${server.address.port}"
+            server = TestHttpServer { exchange -> handle(exchange) }
+            base = "http://127.0.0.1:${server.port}"
         }
 
-        override fun close() = server.stop(0)
+        override fun close() = server.close()
 
-        private fun handle(exchange: HttpExchange) {
+        private fun handle(exchange: TestExchange) {
             val body = exchange.requestBody.readBytes()
             val headers = exchange.requestHeaders.entries.associate { it.key.lowercase() to it.value.first() }
             val path = exchange.requestURI.path
@@ -131,7 +120,7 @@ class AppleAuthTest {
             }
         }
 
-        private fun grandSlam(exchange: HttpExchange, request: Plist) {
+        private fun grandSlam(exchange: TestExchange, request: Plist) {
             when (request["o"]?.asString) {
                 "init" -> {
                     initStatuses.pollFirst()?.let { status ->
@@ -255,7 +244,7 @@ class AppleAuthTest {
 
         @Volatile private var clientA = BigInteger.ONE
 
-        private fun status(exchange: HttpExchange, code: Int, message: String) = plist(
+        private fun status(exchange: TestExchange, code: Int, message: String) = plist(
             exchange,
             Plist.dict(
                 "Response" to Plist.dict(
@@ -264,16 +253,14 @@ class AppleAuthTest {
             )
         )
 
-        private fun plist(exchange: HttpExchange, value: Plist) =
+        private fun plist(exchange: TestExchange, value: Plist) =
             reply(exchange, 200, "text/x-xml-plist", XmlPlist.write(value))
 
-        private fun json(exchange: HttpExchange, code: Int, text: String) =
+        private fun json(exchange: TestExchange, code: Int, text: String) =
             reply(exchange, code, "application/json", text.toByteArray())
 
-        private fun reply(exchange: HttpExchange, code: Int, type: String, body: ByteArray) {
-            exchange.responseHeaders.add("Content-Type", type)
-            exchange.sendResponseHeaders(code, if (body.isEmpty()) -1 else body.size.toLong())
-            if (body.isNotEmpty()) exchange.responseBody.use { it.write(body) } else exchange.close()
+        private fun reply(exchange: TestExchange, code: Int, type: String, body: ByteArray) {
+            exchange.respond(code, type, body)
         }
     }
 

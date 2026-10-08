@@ -1,7 +1,5 @@
 package dev.applesideload.apple
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import dev.applesideload.core.Plist
 import dev.applesideload.core.PlistReader
 import dev.applesideload.core.XmlPlist
@@ -19,7 +17,6 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -50,18 +47,13 @@ class AnisetteV3Test {
         /** The error code midStartProvisioning answers with; 0 is success. */
         @Volatile var startError = 0
 
-        private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         private val prefix = "/apple-" + UUID.randomUUID().toString().take(8)
-        val base: String get() = "http://127.0.0.1:${server.address.port}$prefix"
+        private val server = TestHttpServer { exchange -> handle(exchange) }
+        val base: String get() = "http://127.0.0.1:${server.port}$prefix"
 
-        init {
-            server.createContext("/") { exchange -> handle(exchange) }
-            server.start()
-        }
+        override fun close() = server.close()
 
-        override fun close() = server.stop(0)
-
-        private fun handle(exchange: HttpExchange) {
+        private fun handle(exchange: TestExchange) {
             val body = exchange.requestBody.use { it.readBytes() }
             val headers = exchange.requestHeaders.entries.associate { (key, values) -> key.lowercase() to values.joinToString(",") }
             val path = exchange.requestURI.path.removePrefix(prefix)
@@ -112,13 +104,11 @@ class AnisetteV3Test {
             }
         }
 
-        private fun plist(exchange: HttpExchange, value: Plist) =
+        private fun plist(exchange: TestExchange, value: Plist) =
             reply(exchange, 200, "text/x-xml-plist", XmlPlist.write(value))
 
-        private fun reply(exchange: HttpExchange, code: Int, type: String, body: ByteArray) {
-            exchange.responseHeaders.add("Content-Type", type)
-            exchange.sendResponseHeaders(code, body.size.toLong())
-            exchange.responseBody.use { it.write(body) }
+        private fun reply(exchange: TestExchange, code: Int, type: String, body: ByteArray) {
+            exchange.respond(code, type, body)
         }
     }
 
