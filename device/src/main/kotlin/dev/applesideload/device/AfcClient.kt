@@ -73,12 +73,6 @@ class AfcClient(private val transport: Transport) : Closeable {
         totalBytes: Long,
         onProgress: (Long) -> Unit = {}
     ) {
-        // Leftover directories from a failed staging pass make OP_FILE_OPEN fail
-        // with "destination is not empty". Clear the path first so MODE_WRITE
-        // always starts from a clean slate.
-        if (exists(path)) {
-            removeTree(path)
-        }
         val handle = open(path, MODE_WRITE)
         try {
             val buffer = ByteArray(CHUNK)
