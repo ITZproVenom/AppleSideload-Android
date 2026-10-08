@@ -352,6 +352,17 @@ class DeveloperSession(
                     "the window to pass"
             )
 
+            // As isideload found: listAllDevelopmentCerts also lists the
+            // cross-platform "Apple Development" certificates Xcode makes,
+            // and the iOS endpoint cannot revoke those.
+            7252 -> DeveloperServiceException(
+                result,
+                detail,
+                limitation = "this looks like an \"Apple Development\" certificate made by Xcode, " +
+                    "which Apple's iOS certificate service cannot revoke",
+                alternative = "remove it in Xcode (Settings, Accounts, Manage Certificates), then try again"
+            )
+
             7460 -> DeveloperServiceException(
                 result,
                 detail,
