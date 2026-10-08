@@ -48,180 +48,298 @@ data class InstallOutcome(
 )
 
 /**
- * Signs and installs IPAs. The long path is the one-tap SideStore / LiveContainer
- * installs; the short path is a user-supplied IPA.
+ * From this iOS version lockdownd resets connections that come through
+ * LocalDevVPN (SideStore issue 1532), so SideStore can refresh only with a
+ * Remote Pairing file, which only its newest builds read.
+ */
+const val REMOTE_PAIRING_ONLY_FROM_IOS = 27
+
+/**
+ * The whole install, from an IPA on the phone to an app on the iPhone.
+ *
+ * The pipeline follows SideInstaller and isideload: the bundle identifiers
+ * get the team id appended, every extension gets its own App ID, all of them
+ * share one app group, the team profile for the main App ID is embedded in
+ * the app and each extension, and SideStore gets its certificate and, after
+ * the install, the pairing file it needs to refresh apps on the iPhone by
+ * itself over LocalDevVPN. Nothing reports success it did not get.
  */
 class SideloadEngine(
     private val context: Context,
-    private val identityStore: IdentityStore,
-    private val anisette: AnisetteProvider
+    private val anisette: AnisetteProvider,
+    private val identityStore: IdentityStore
 ) {
 
-    fun installSpecial(
-        device: DeviceSession,
-        special: SpecialApp,
-        apple: AppleSession,
-        team: DeveloperTeam,
-        onStep: (SideloadStep) -> Unit
-    ): InstallOutcome {
-        onStep(SideloadStep.Preparing("fetching ${special.displayName}"))
-        val ipa = AppSources.download(special, context.cacheDir) { percent ->
-            onStep(SideloadStep.Downloading(percent))
-        }
-        return installIpa(device, ipa, apple, team, special, onStep)
-    }
+    private val auth = AppleAuth(anisette)
 
-    fun installIpa(
+    fun install(
+        ipa: File,
+        source: InstallSource,
         device: DeviceSession,
-        ipaFile: File,
-        apple: AppleSession,
+        session: AppleSession,
         team: DeveloperTeam,
-        special: SpecialApp = SpecialApp.GENERIC,
         onStep: (SideloadStep) -> Unit
     ): InstallOutcome {
-        val work = File(context.cacheDir, "sideload-${System.currentTimeMillis()}").also { it.mkdirs() }
+        val work = File(context.cacheDir, "sideload-${System.currentTimeMillis()}")
         try {
-            onStep(SideloadStep.Preparing("unpacking"))
-            val info = IpaPackage.unpack(ipaFile, work)
+            onStep(SideloadStep.Preparing("reading the app"))
+            val info = IpaPackage.inspect(ipa)
+
+            onStep(SideloadStep.Preparing("unpacking the app"))
+            work.mkdirs()
+            ipa.inputStream().use { IpaPackage.extract(it, work) }
             val bundle = IpaPackage.appBundle(work)
-            val detected = if (special != SpecialApp.GENERIC) special else SpecialApp.detect(bundle, info.bundleId)
-            Log.i(LogTag.SIGN, "preparing ${info.name} ($detected)")
+            val special = SpecialApp.detect(bundle, info.bundleId)
+            Log.i(LogTag.SIGN, "preparing ${info.name} ($special)")
 
             onStep(SideloadStep.Account("checking the signing certificate"))
-            val developer = DeveloperSession(apple, anisette)
+            val developer = DeveloperSession(session, anisette, auth)
             val (identity, machineId) = ensureIdentity(developer, team)
 
-            onStep(SideloadStep.Signing(info.bundleId))
-            val signedIpa = sign(
-                work = work,
-                bundle = bundle,
-                info = info,
-                identity = identity,
-                team = team,
-                developer = developer,
-                special = detected,
-                machineId = machineId
+            onStep(SideloadStep.Account("registering this iPhone"))
+            developer.registerDevice(team.teamId, device.info.udid, device.info.name)
+
+            // Identifiers, as isideload makes them: <original>.<TEAMID>, and
+            // every extension keeps its suffix under the new main identifier.
+            val newBundleId = uniqueBundleId(info.bundleId, team.teamId)
+            val extensions = IpaPackage.extensions(bundle)
+            val extensionIds = extensions.map { appex ->
+                val id = IpaPackage.readInfo(appex)["CFBundleIdentifier"]?.asString
+                    ?: throw SigningException(
+                        operation = "preparing ${appex.name}",
+                        reason = "the extension has no bundle identifier"
+                    )
+                if (!id.startsWith("${info.bundleId}.")) {
+                    throw SigningException(
+                        operation = "preparing ${appex.name}",
+                        reason = "the extension identifier $id is not under ${info.bundleId}",
+                        limitation = "a free account can only provision extensions named under the app",
+                        alternative = "use a build of the app whose extensions follow its identifier"
+                    )
+                }
+                newBundleId + id.removePrefix(info.bundleId)
+            }
+            IpaPackage.rewriteIdentifiers(bundle, info.bundleId, newBundleId, null)
+
+            onStep(SideloadStep.Account("preparing ${1 + extensionIds.size} app identifier(s)"))
+            val appIds = ensureAppIds(developer, team, listOf(newBundleId to info.name) +
+                extensionIds.zip(extensions.map { it.nameWithoutExtension }))
+            val mainAppId = appIds.first { it.identifier == newBundleId }
+
+            val groupId = "group." + if (special == SpecialApp.SIDESTORE_LIVECONTAINER) {
+                "${SpecialApp.SIDESTORE_ID}.${team.teamId}"
+            } else {
+                newBundleId
+            }
+            onStep(SideloadStep.Account("preparing the app group"))
+            val group = developer.ensureAppGroup(team.teamId, groupId, info.name)
+            appIds.forEach { appId ->
+                developer.enableAppGroups(team.teamId, appId.appIdId)
+                developer.assignAppGroup(team.teamId, appId.appIdId, group.groupId)
+            }
+
+            onStep(SideloadStep.Account("downloading the provisioning profile"))
+            val profile = ProvisioningProfile(
+                developer.downloadProvisioningProfile(team.teamId, mainAppId.appIdId)
             )
+            if (!profile.covers(device.info.udid)) {
+                throw SigningException(
+                    operation = "preparing the provisioning profile",
+                    reason = "Apple returned a profile that does not list this iPhone",
+                    limitation = "a profile only covers devices registered to the account " +
+                        "at the time it was issued",
+                    alternative = "try again, which asks Apple for a fresh profile"
+                )
+            }
+
+            applySpecialBehaviour(bundle, extensions, special, groupId, identity, machineId, device.info.udid)
+
+            val extra = if (special.usesLiveContainerKeychain) {
+                mapOf(
+                    "keychain-access-groups" to Plist.Arr(
+                        listOf(Plist.Str("${team.teamId}.com.kdt.livecontainer.shared")) +
+                            (1 until 128).map { Plist.Str("${team.teamId}.com.kdt.livecontainer.shared.$it") }
+                    )
+                )
+            } else {
+                emptyMap()
+            }
+            val signer = BundleSigner(identity, profile, extra)
+            signer.onProgress = { onStep(SideloadStep.Signing(it)) }
+            signer.sign(bundle)
+
+            onStep(SideloadStep.Preparing("packing the signed app"))
+            val signedIpa = File(work.parentFile, "${work.name}.ipa")
+            IpaPackage.pack(work, signedIpa)
 
             upload(device, signedIpa, onStep)
             installStaged(device, signedIpa.name, onStep)
+            signedIpa.delete()
 
-            val handedOff = if (detected.needsPairingFile) {
-                onStep(SideloadStep.HandOff("writing the pairing file into SideStore"))
-                handOffPairing(device, detected.hostBundleId(team.teamId), device.udid)
-            } else false
+            val handedOff = if (special == SpecialApp.SIDESTORE || special == SpecialApp.SIDESTORE_LIVECONTAINER) {
+                handOffPairing(device, newBundleId, special, onStep)
+                true
+            } else {
+                false
+            }
 
-            val expiresInDays = ((identity.expiresAt - System.currentTimeMillis()) / (24 * 60 * 60 * 1000L)).toInt().coerceAtLeast(0)
-            onStep(SideloadStep.Finished(info.bundleId, expiresInDays))
-            return InstallOutcome(
-                name = info.name,
-                bundleId = uniqueBundleId(info.bundleId, team.teamId),
-                expiresInDays = expiresInDays,
-                special = detected,
-                pairingHandedOff = handedOff
-            )
+            onStep(SideloadStep.Finished(newBundleId, profile.daysRemaining))
+            Log.i(LogTag.INSTALL, "installed $newBundleId ($source) on ${device.info.name}")
+            return InstallOutcome(info.name, newBundleId, profile.daysRemaining, special, handedOff)
         } finally {
             work.deleteRecursively()
         }
     }
 
-    private fun sign(
-        work: File,
-        bundle: File,
-        info: IpaPackage.Info,
-        identity: SigningIdentity,
-        team: DeveloperTeam,
+    private fun ensureAppIds(
         developer: DeveloperSession,
-        special: SpecialApp,
-        machineId: String?
-    ): File {
-        val teamId = team.teamId
-        val mainBundleId = uniqueBundleId(info.bundleId, teamId)
-        Log.i(LogTag.SIGN, "rewrote the bundle identifier for this account")
-
-        // Register App IDs for the main bundle and every extension.
-        val appIds = mutableMapOf<String, DeveloperAppId>()
-        val main = developer.ensureAppId(teamId, mainBundleId, info.name)
-        appIds[mainBundleId] = main
-
-        val extensions = IpaPackage.listExtensions(bundle)
-        for (ext in extensions) {
-            val extId = uniqueBundleId(ext.bundleId, teamId)
-            appIds[extId] = developer.ensureAppId(teamId, extId, ext.name)
+        team: DeveloperTeam,
+        wanted: List<Pair<String, String>>
+    ): List<DeveloperAppId> {
+        val existing = developer.listAppIds(team.teamId)
+        return wanted.map { (identifier, name) ->
+            existing.firstOrNull { it.identifier == identifier }
+                ?: developer.addAppId(team.teamId, identifier, name)
         }
-
-        // Shared app group for SideStore / LiveContainer.
-        val groupId = special.appGroup(teamId)
-        if (groupId != null) {
-            developer.ensureAppGroup(teamId, groupId)
-            for (appId in appIds.values) {
-                developer.addAppGroupToAppId(teamId, appId.appIdId, groupId)
-            }
-        }
-
-        // Profiles.
-        val profiles = mutableMapOf<String, ProvisioningProfile>()
-        for ((bundleId, appId) in appIds) {
-            profiles[bundleId] = developer.ensureProfile(teamId, appId, identity.certificate)
-        }
-
-        // Embed certificate for SideStore.
-        if (special.embedsCertificate) {
-            val p12 = Pkcs12.encode(identity)
-            File(bundle, "ALTCertificate.p12").writeBytes(p12)
-            Log.i(LogTag.SIGN, "gave SideStoreApp.framework the signing certificate")
-        }
-
-        BundleSigner.sign(
-            bundleDir = bundle,
-            identity = identity,
-            profiles = profiles,
-            teamId = teamId,
-            mainBundleId = mainBundleId,
-            extensionBundleIds = extensions.associate { it.bundleId to uniqueBundleId(it.bundleId, teamId) },
-            appGroup = groupId,
-            keychainGroups = special.keychainGroups(teamId),
-            machineId = machineId
-        )
-
-        return IpaPackage.repack(work, File(work, "signed.ipa"))
     }
 
-    private fun handOffPairing(device: DeviceSession, hostBundleId: String, udid: String): Boolean {
-        // Pairing files live under the SideStore documents container.
-        // See SideStore docs and the constants below.
-        return try {
-            val pairing = identityStore.loadPairingRecord(udid) ?: return false
-            val legacy = pairing.legacyBytes ?: return false
-            val completeLockdown = pairing.completeLockdownBytes
-            val remote = pairing.remoteBytes
-            val prefix = "Documents/"
-            device.appContainer(hostBundleId, wholeContainer = true).use { afc ->
-                afc.makeDirectories(prefix.trimEnd('/'))
-                writeVerified(afc, prefix + LEGACY_PAIRING_FILE, legacy)
-                completeLockdown?.let { writeVerified(afc, prefix + LOCKDOWN_PAIRING_FILE, it) }
-                remote?.let { writeVerified(afc, prefix + REMOTE_PAIRING_FILE, it) }
+    /**
+     * What AltServer and isideload write into SideStore-family bundles.
+     *
+     * ALTAppGroups tells SideStore and its widget which group to share data
+     * through. ALTCertificateID and ALTCertificate.p12 give SideStore the
+     * certificate that signed it, so it can sign and refresh apps on the
+     * iPhone with the same certificate instead of revoking it.
+     */
+    private fun applySpecialBehaviour(
+        bundle: File,
+        extensions: List<File>,
+        special: SpecialApp,
+        groupId: String,
+        identity: SigningIdentity,
+        machineId: String?,
+        udid: String
+    ) {
+        if (special == SpecialApp.NONE || special == SpecialApp.LIVECONTAINER) return
+        val groups = Plist.Arr(listOf(Plist.Str(groupId)))
+        IpaPackage.editInfo(bundle) { it["ALTAppGroups"] = groups }
+        extensions.forEach { appex -> IpaPackage.editInfo(appex) { it["ALTAppGroups"] = groups } }
+        if (special == SpecialApp.ALTSTORE) {
+            IpaPackage.editInfo(bundle) { it["ALTDeviceID"] = Plist.Str(udid) }
+        }
 
-                // Point SideStore at the right protocol for this iOS version.
-                val prefsPath = "Library/Preferences/com.SideStore.SideStore.plist"
+        val target = if (special == SpecialApp.SIDESTORE_LIVECONTAINER) {
+            IpaPackage.frameworks(bundle).first {
+                IpaPackage.readInfo(it)["CFBundleIdentifier"]?.asString == SpecialApp.SIDESTORE_ID
+            }
+        } else {
+            bundle
+        }
+        if (machineId.isNullOrBlank()) {
+            Log.w(
+                LogTag.SIGN,
+                "the certificate has no machine id, so SideStore cannot be given it; it will " +
+                    "ask to sign in and make its own"
+            )
+            return
+        }
+        val serial = identity.certificate.serialNumber.toString(16).uppercase()
+        IpaPackage.editInfo(target) { it["ALTCertificateID"] = Plist.Str(serial) }
+        File(target, "ALTCertificate.p12").writeBytes(Pkcs12.export(identity, machineId))
+        Log.i(LogTag.SIGN, "gave ${target.name} the signing certificate")
+    }
+
+    /**
+     * Gives SideStore its pairing files, as SideInstaller does.
+     *
+     * With them SideStore reaches the iPhone through LocalDevVPN and refreshes
+     * itself, LiveContainer and every app it installed, on the iPhone, every
+     * day, with no computer and without this phone.
+     *
+     * Older builds and the SideStore inside LiveContainer read the classic
+     * lockdown record from ALTPairingFile.mobiledevicepairing. Nightlies from
+     * September 2026 read PairingFile_Lockdown.plist or
+     * PairingFile_RemoteRP.plist instead, only once isPairingReset is off,
+     * and load the one activePairingProtocol names. On iOS 27 lockdownd
+     * resets connections that arrive through LocalDevVPN, so there the
+     * Remote Pairing record is the one SideStore can use.
+     */
+    private fun handOffPairing(
+        device: DeviceSession,
+        hostBundleId: String,
+        special: SpecialApp,
+        onStep: (SideloadStep) -> Unit
+    ) {
+        onStep(SideloadStep.HandOff("allowing SideStore to reach the iPhone over LocalDevVPN"))
+        runCatching { device.enableWirelessLockdown() }.onFailure {
+            Log.w(LogTag.LOCKDOWN, "could not enable wireless lockdown: ${it.message}; SideStore may refuse the pairing file")
+        }
+
+        // A session through the Wi-Fi tunnel has a lockdown record only if
+        // the iPhone was connected by cable to this phone before.
+        val lockdown = device.record?.let { device.pairingFileForApps() }
+        val missing = lockdown?.let { file ->
+            val keys = PlistReader.parse(file).asDict.orEmpty().keys
+            REQUIRED_PAIRING_KEYS.filterNot { it in keys }
+        }.orEmpty()
+        if (missing.isNotEmpty()) {
+            Log.w(
+                LogTag.PAIR,
+                "the pairing record lacks ${missing.joinToString()}; SideStore needs them. " +
+                    "Unpair and pair again with the iPhone unlocked so the escrow bag is issued."
+            )
+        }
+        val completeLockdown = lockdown?.takeIf { missing.isEmpty() }
+        val remote = device.remotePairing?.toAppPlist()
+        val legacy = lockdown ?: remote ?: throw DeviceException(
+            operation = "giving SideStore its pairing file",
+            reason = "this phone has no pairing record for ${device.info.name}",
+            limitation = "SideStore is installed, but cannot refresh apps by itself without one",
+            alternative = "connect the iPhone by USB or pair it wirelessly, then install SideStore again"
+        )
+        val lockdownBlocked = device.info.majorVersion >= LOCKDOWN_OVER_VPN_BLOCKED_FROM
+        val protocol = when {
+            remote != null && (lockdownBlocked || completeLockdown == null) -> PROTOCOL_REMOTE
+            completeLockdown != null -> PROTOCOL_LOCKDOWN
+            else -> null
+        }
+        if (lockdownBlocked && remote == null) {
+            Log.w(
+                LogTag.PAIR,
+                "on iOS ${device.info.majorVersion} SideStore can only reach the iPhone with a Remote Pairing " +
+                    "record, and this phone has none for ${device.info.name}, so SideStore will ask for a " +
+                    "pairing file. Pair wirelessly from this app, then install SideStore again."
+            )
+        }
+
+        onStep(SideloadStep.HandOff("writing the pairing file into SideStore"))
+        val prefix = "/Documents/" + special.sideStoreDocumentsPrefix
+        device.appContainer(hostBundleId, wholeContainer = true).use { afc ->
+            afc.makeDirectories(prefix.trimEnd('/'))
+            writeVerified(afc, prefix + LEGACY_PAIRING_FILE, legacy)
+            completeLockdown?.let { writeVerified(afc, prefix + LOCKDOWN_PAIRING_FILE, it) }
+            remote?.let { writeVerified(afc, prefix + REMOTE_PAIRING_FILE, it) }
+            if (protocol != null) {
+                val prefsPath = "/" + special.sideStorePreferences(hostBundleId)
                 val existing = afc.readIfPresent(prefsPath)
-                val prefs = if (existing != null) {
-                    (PlistReader.read(existing) as? Plist.Dict)?.map?.toMutableMap() ?: mutableMapOf()
-                } else mutableMapOf()
-                val iosMajor = device.productVersion.split('.').firstOrNull()?.toIntOrNull() ?: 0
-                prefs["pairingFileProtocol"] = Plist.Str(
-                    if (iosMajor >= LOCKDOWN_OVER_VPN_BLOCKED_FROM) PROTOCOL_REMOTE else PROTOCOL_LOCKDOWN
+                val prefs = LinkedHashMap(
+                    existing?.takeIf { it.isNotEmpty() }?.let { PlistReader.parse(it).asDict }.orEmpty()
                 )
+                // What SideStore's own import sets. A protocol picked in its
+                // settings lives in preferredPairingProtocol and is left alone.
+                prefs["isPairingReset"] = Plist.Bool(false)
+                prefs["activePairingProtocol"] = Plist.Str(protocol)
                 afc.makeDirectories(prefsPath.substringBeforeLast('/'))
                 val staging = "$prefsPath.applesideload"
                 writeVerified(afc, staging, BinaryPlist.write(Plist.Dict(prefs)))
                 if (afc.exists(prefsPath)) afc.removePath(prefsPath)
                 afc.rename(staging, prefsPath)
             }
-            true
-        } catch (e: Exception) {
-            Log.w(LogTag.INSTALL, "could not hand off the pairing file: ${e.message}")
-            false
+        }
+        when (protocol) {
+            PROTOCOL_REMOTE -> Log.i(LogTag.PAIR, "SideStore has its Remote Pairing file and can refresh on the iPhone")
+            PROTOCOL_LOCKDOWN -> Log.i(LogTag.PAIR, "SideStore has its pairing file and can refresh on the iPhone")
+            else -> Log.w(LogTag.PAIR, "SideStore has only an incomplete pairing file; it will ask for a new one")
         }
     }
 
@@ -280,11 +398,28 @@ class SideloadEngine(
             }
             Log.i(LogTag.SIGN, "the stored certificate is no longer valid for this account")
         }
-        // Issue a new one.
-        val keyPair = identityStore.generateKeyPair()
-        val csr = identityStore.buildCsr(keyPair)
-        val issued = developer.createCertificate(team.teamId, csr)
-        identityStore.saveSigningIdentity(keyPair.private.encoded, issued.data)
+
+        // A free account holds a small number of development certificates.
+        // One made by SideStore on the iPhone, or by another computer, is
+        // fine to keep alongside ours, so only a full quota is a problem.
+        val (keyPair, csr) = SigningIdentity.createCertificateRequest("AppleSideload")
+        identityStore.savePendingKey(keyPair.private.encoded)
+        val issued = try {
+            developer.submitCertificateRequest(team.teamId, csr, "AppleSideload")
+        } catch (error: Exception) {
+            if (remote.isNotEmpty()) {
+                throw SigningException(
+                    operation = "preparing a signing certificate",
+                    reason = "Apple would not issue another development certificate: ${error.message}",
+                    limitation = "a free account may hold only a few development certificates, and " +
+                        "their private keys cannot be copied from the machines that made them",
+                    alternative = "revoke the existing certificates in the Account screen; SideStore " +
+                        "will ask you to sign in again afterwards"
+                )
+            }
+            throw error
+        }
+        identityStore.saveSigningKey(keyPair.private.encoded, issued.data)
         issued.machineId?.let { identityStore.saveMachineId(it) }
         return SigningIdentity.from(keyPair.private.encoded, issued.data) to issued.machineId
     }
