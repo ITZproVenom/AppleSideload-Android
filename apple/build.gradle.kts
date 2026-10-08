@@ -35,4 +35,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlin.coroutines.test)
+    // The real org.json: android.jar's stub only returns empty values in unit tests.
+    testImplementation(libs.orgjson)
 }

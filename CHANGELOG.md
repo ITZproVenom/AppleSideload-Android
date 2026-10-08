@@ -6,6 +6,39 @@ as `build-<number>`. The build number is also the app's version code, so each
 build installs over the previous one. The *Unreleased* section becomes the
 notes of the next release.
 
+## Unreleased: Apple sign-in fixed
+
+### Apple sign-in
+- Signing in to an Apple ID always failed. Apple's sign-in server answers the
+  identity the app presented (an old Xcode client) with *503 Service
+  Unavailable*. The app now signs in the way SideStore and SideInstaller do,
+  as macOS's own account service, with the requests Apple accepts today.
+- The password proof (SRP) had three calculation errors, so Apple would have
+  refused even the right password. It now matches the reference
+  implementation, checked against values computed with it.
+- The app sets up its own device identity with the anisette server
+  (anisette v3) and keeps it on the phone. Apple sees the same device each
+  time, so two-factor is needed once and your account lists one device. Like
+  SideStore and SideInstaller, that device shows as a Mac: Apple has no
+  sign-in for Android. Anisette servers that only offer the older API still
+  work.
+- Two-factor: the trusted phone numbers load, so codes by text message work
+  (the list was always empty). A wrong code can be typed again, and if Apple
+  asks for another code after the first one, the app asks for it instead of
+  stopping.
+- The token for Apple's developer service is requested and decrypted the way
+  Apple sends it now.
+- When Apple is busy (*429 Too Many Requests*), the app waits and tries twice
+  more. Apple's error pages show as a short sentence with the status instead
+  of an XML parser error.
+
+### Fixes
+- Error names in the Activity log stay readable in release builds. The code
+  shrinker had shortened the app's own error names to single letters.
+- On iOS 27 the iPhone can close its heartbeat service as soon as it opens.
+  The log now says so as information instead of a warning; the connection
+  was never affected.
+
 ## build-25: new look, web controller on by default, iOS 27 SideStore builds
 
 ### iOS 27: the right SideStore build

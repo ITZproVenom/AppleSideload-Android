@@ -6,3 +6,6 @@
 # whole so R8 cannot strip suites or extensions it only reaches through tables.
 -keep class org.bouncycastle.tls.** { *; }
 -dontwarn org.bouncycastle.**
+# Error names appear in the log and on screen ("RemotePairingException: ...");
+# keep them readable instead of R8's one-letter names.
+-keepnames class * extends java.lang.Throwable

@@ -26,7 +26,9 @@ interface Transport : Closeable {
         while (filled < length) {
             val read = read(out, filled, length - filled, timeoutMs)
             if (read <= 0) {
-                throw IOException(
+                // EOFException (an IOException) so a peer that simply closed
+                // can be told apart from a failure.
+                throw java.io.EOFException(
                     "the connection ended after $filled of $length bytes ($description)"
                 )
             }

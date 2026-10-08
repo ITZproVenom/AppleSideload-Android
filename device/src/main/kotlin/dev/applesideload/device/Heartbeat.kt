@@ -27,6 +27,7 @@ class Heartbeat private constructor(
 
     private fun loop() {
         var waitMs = FIRST_WAIT_MS
+        var answered = 0
         try {
             while (!closed) {
                 val message = service.receive(waitMs)
@@ -36,11 +37,20 @@ class Heartbeat private constructor(
                 }
                 val interval = message["Interval"]?.asLong?.takeIf { it in 1..MAX_INTERVAL_S } ?: DEFAULT_INTERVAL_S
                 service.send(POLO)
+                answered++
                 waitMs = ((interval + GRACE_S) * 1_000).toInt()
             }
         } catch (error: Exception) {
-            if (!closed) {
-                Log.w(LogTag.LOCKDOWN, "$deviceName stopped answering the heartbeat: ${Log.describe(error)}")
+            when {
+                closed -> Unit
+                // Seen with iOS 27 over the tunnel: the service is opened and
+                // closed again before any Marco, and everything else keeps
+                // working. Nothing was lost, so it is not a warning.
+                answered == 0 && error is java.io.EOFException -> Log.i(
+                    LogTag.LOCKDOWN,
+                    "$deviceName closed its heartbeat service as soon as it opened; the session goes on without it"
+                )
+                else -> Log.w(LogTag.LOCKDOWN, "$deviceName stopped answering the heartbeat: ${Log.describe(error)}")
             }
         } finally {
             runCatching { service.close() }
