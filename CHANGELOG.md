@@ -6,13 +6,7 @@ as `build-<number>`. The build number is also the app's version code, so each
 build installs over the previous one. The *Unreleased* section becomes the
 notes of the next release.
 
-## Unreleased: AFC staging fix
-
-### Fixes
-- Staging an IPA no longer fails with *an AFC request (operation 13) failed:
-  the destination is not empty* when a previous install left a directory under
-  `/PublicStaging`. The target path is cleared with `removeTree` before the
-  upload, and the same cleanup runs after a successful install.
+## Unreleased: Apple sign-in fixed
 
 ### Apple sign-in
 - Signing in to an Apple ID always failed. Apple's sign-in server answers the
