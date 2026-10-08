@@ -4,8 +4,6 @@ import java.math.BigInteger
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
@@ -18,9 +16,10 @@ import javax.crypto.spec.SecretKeySpec
  * PBKDF2 over the SHA-256 of the password ("s2k"), or over its hex encoding
  * ("s2k_fo").
  */
-class SrpClient(private val random: SecureRandom = SecureRandom()) {
+class SrpClient internal constructor(private val a: BigInteger) {
 
-    private val a: BigInteger = BigInteger(256, random).mod(N)
+    constructor(random: SecureRandom = SecureRandom()) : this(privateValue(random))
+
     /** A = g^a mod N, the public value sent with the first request. */
     val publicA: BigInteger = G.modPow(a, N)
 
@@ -49,22 +48,29 @@ class SrpClient(private val random: SecureRandom = SecureRandom()) {
         val b = BigInteger(1, serverB)
         require(b.mod(N) != BigInteger.ZERO) { "the server sent an invalid B" }
 
-        val x = BigInteger(1, hash(salt + derivePassword(password, salt, iterations, protocol)))
+        // x = H(s | H(":" | p)): Apple leaves the account name out of x (so an
+        // Apple ID can change its address without a new verifier) but keeps
+        // the separator, exactly as corecrypto does with noUsernameInX.
+        val password = derivePassword(password, salt, iterations, protocol)
+        val x = BigInteger(1, hash(salt + hash(":".toByteArray() + password)))
         val k = BigInteger(1, hash(pad(N) + pad(G)))
         val u = BigInteger(1, hash(pad(publicA) + pad(b)))
+        require(u != BigInteger.ZERO) { "the server sent a B that makes the exchange unsafe" }
 
         val base = b.subtract(k.multiply(G.modPow(x, N)).mod(N)).mod(N)
         val s = base.modPow(a.add(u.multiply(x)), N)
         val sharedKey = hash(unsigned(s))
         sessionKey = sharedKey
 
+        // M1 = H(H(N) xor H(PAD(g)) | H(I) | s | A | B | K), as RFC 5054
+        // clients (pysrp in RFC 5054 mode, corecrypto) compute it.
         val hn = hash(unsigned(N))
-        val hg = hash(unsigned(G))
+        val hg = hash(pad(G))
         val hxor = ByteArray(hn.size) { (hn[it].toInt() xor hg[it].toInt()).toByte() }
         val m1 = hash(
-            hxor + hash(username.toByteArray()) + salt + pad(publicA) + pad(b) + sharedKey
+            hxor + hash(username.toByteArray()) + salt + unsigned(publicA) + unsigned(b) + sharedKey
         )
-        expectedM2 = hash(pad(publicA) + m1 + sharedKey)
+        expectedM2 = hash(unsigned(publicA) + m1 + sharedKey)
         return m1
     }
 
@@ -97,9 +103,27 @@ class SrpClient(private val random: SecureRandom = SecureRandom()) {
                 "Apple asked for the unknown SRP protocol \"$protocol\""
             )
         }
-        val chars = CharArray(input.size) { (input[it].toInt() and 0xFF).toChar() }
-        val spec = PBEKeySpec(chars, salt, iterations, 256)
-        return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        // PBKDF2 by hand: the platform's PBKDF2WithHmacSHA256 takes a char[]
+        // and UTF-8 encodes it, which mangles the raw digest bytes "s2k" uses.
+        return pbkdf2(input, salt, iterations)
+    }
+
+    private fun pbkdf2(secret: ByteArray, salt: ByteArray, iterations: Int): ByteArray {
+        require(iterations > 0) { "Apple sent an iteration count of $iterations" }
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(secret, "HmacSHA256"))
+        // One block is enough: the derived key is exactly one SHA-256 output.
+        mac.update(salt)
+        mac.update(byteArrayOf(0, 0, 0, 1))
+        var block = mac.doFinal()
+        val result = block.copyOf()
+        repeat(iterations - 1) {
+            block = mac.doFinal(block)
+            for (index in result.indices) {
+                result[index] = (result[index].toInt() xor block[index].toInt()).toByte()
+            }
+        }
+        return result
     }
 
     private fun hash(data: ByteArray): ByteArray =
@@ -133,5 +157,23 @@ class SrpClient(private val random: SecureRandom = SecureRandom()) {
             16
         )
         private val G = BigInteger.valueOf(2)
+        private val WIDTH = (N.bitLength() + 7) / 8
+
+        /**
+         * A random private value whose public value fills all 256 bytes.
+         *
+         * SRP implementations disagree on whether A is padded inside the
+         * hashes; with no leading zero byte every reading gives the same
+         * bytes, so a rare sign-in failure cannot come from that.
+         */
+        private fun privateValue(random: SecureRandom): BigInteger {
+            while (true) {
+                val candidate = BigInteger(256, random)
+                if (candidate.signum() == 0) continue
+                val bytes = G.modPow(candidate, N).toByteArray()
+                val width = if (bytes[0] == 0.toByte()) bytes.size - 1 else bytes.size
+                if (width == WIDTH) return candidate
+            }
+        }
     }
 }
