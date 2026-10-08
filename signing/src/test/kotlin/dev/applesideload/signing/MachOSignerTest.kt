@@ -32,9 +32,10 @@ class MachOSignerTest {
         at += textSize
         b.putInt(at, 0x19); b.putInt(at + 4, linkeditSize)
         "__LINKEDIT".toByteArray().copyInto(data, at + 8)
-        b.putLong(at + 24, 0x4000L) // vmsize
-        b.putLong(at + 32, 0x1000L) // fileoff
-        b.putLong(at + 40, 0x100L) // filesize
+        b.putLong(at + 24, 0x1000L) // vmaddr
+        b.putLong(at + 32, 0x4000L) // vmsize
+        b.putLong(at + 40, 0x1000L) // fileoff
+        b.putLong(at + 48, 0x100L) // filesize
         return data
     }
 
@@ -63,7 +64,7 @@ class MachOSignerTest {
         assertTrue(size >= 64)
         assertEquals(0x1100 + size, signed.size)
         val linkedit = 32 + 152
-        assertEquals((0x1100 + size - 0x1000).toLong(), b.getLong(linkedit + 40))
+        assertEquals((0x1100 + size - 0x1000).toLong(), b.getLong(linkedit + 48))
         // the result re-reads as a signed executable
         val reread = MachOFile(signed).slices.single()
         assertEquals(command, reread.codeSignatureCommandOffset)
