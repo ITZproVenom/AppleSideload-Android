@@ -230,7 +230,10 @@ class MainActivity : ComponentActivity() {
                     onRequestPhoneCode = viewModel::requestPhoneCode,
                     onSelectTeam = viewModel::selectTeamById,
                     onSignOut = viewModel::signOut,
-                    onRevoke = viewModel::revokeCertificate
+                    onRevoke = viewModel::revokeCertificate,
+                    appIds = state.appIds,
+                    onLoadAppIds = viewModel::loadAppIds,
+                    onDeleteAppId = viewModel::deleteAppId
                 )
 
                 Destination.SETTINGS -> {
