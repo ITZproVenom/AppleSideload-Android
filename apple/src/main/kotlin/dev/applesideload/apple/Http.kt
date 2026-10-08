@@ -64,8 +64,9 @@ class Http(private val timeoutMs: Int = 30_000) {
         headers: Map<String, String> = emptyMap(),
         body: ByteArray? = null
     ): HttpResponse {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            if (this !is HttpsURLConnection && !url.startsWith("http://")) {
+        val opened = URL(url).openConnection()
+        val connection = (opened as? HttpURLConnection ?: throw IOException("$url is not an http or https address")).apply {
+            if (this !is HttpsURLConnection && !url.startsWith("http://", ignoreCase = true)) {
                 throw IOException("refusing to send credentials over a plain connection")
             }
             if (this is HttpsURLConnection && AppleTrust.appliesTo(this.url.host)) {
