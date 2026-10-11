@@ -17,6 +17,9 @@ android {
     kotlinOptions { jvmTarget = "17" }
     sourceSets["main"].java.srcDir("src/main/kotlin")
     sourceSets["test"].java.srcDir("src/test/kotlin")
+    // core's Log writes through android.util.Log, which only exists as a
+    // throwing stub in local unit tests.
+    testOptions { unitTests.isReturnDefaultValues = true }
     lint {
         abortOnError = true
         warningsAsErrors = false

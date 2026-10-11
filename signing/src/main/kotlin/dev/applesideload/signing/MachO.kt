@@ -122,38 +122,41 @@ class MachOSlice(
     /** The bytes of this slice as they stand. */
     fun bytes(): ByteArray = container.copyOfRange(offset, offset + size)
 
-    /** Room left in the header for one more load command. */
+    /**
+     * Room left in the header for more load commands.
+     *
+     * The header's padding ends where the first section's contents begin,
+     * which is inside __TEXT, so the sections are what has to be read - the
+     * segments themselves start at offset zero and say nothing.
+     */
     fun freeHeaderSpace(): Int {
         val used = headerSize + commandsSize
-        // The first section's file offset is the earliest byte that is not
-        // header padding, and overwriting it would corrupt the binary.
-        var firstSection = Int.MAX_VALUE
+        var firstContent = size
         var position = headerSize
         repeat(commandCount) {
-            buffer.position(position)
-            val command = buffer.int
-            val commandSize = buffer.int
+            val command = buffer.getInt(position)
+            val commandSize = buffer.getInt(position + 4)
             if (command == LC_SEGMENT_64 || command == LC_SEGMENT_32) {
-                val name = ByteArray(16)
-                buffer.get(name)
-                val segment = String(name).trimEnd('\u0000')
-                val fileOffset = if (command == LC_SEGMENT_64) {
-                    buffer.long // vmaddr
-                    buffer.long // vmsize
-                    buffer.long
-                } else {
-                    buffer.int
-                    buffer.int
-                    buffer.int.toLong() and 0xFFFFFFFFL
-                }
-                if (segment != "__PAGEZERO" && fileOffset > 0) {
-                    firstSection = minOf(firstSection, fileOffset.toInt())
+                val wide = command == LC_SEGMENT_64
+                val sectionCount = buffer.getInt(position + if (wide) 64 else 48)
+                val first = position + if (wide) 72 else 56
+                val each = if (wide) 80 else 68
+                if (sectionCount in 0..1000 && first + sectionCount * each <= position + commandSize) {
+                    for (index in 0 until sectionCount) {
+                        val start = first + index * each
+                        val fileOffset = buffer.getInt(start + if (wide) 48 else 40).toLong() and 0xFFFFFFFFL
+                        val length = if (wide) buffer.getLong(start + 40)
+                        else buffer.getInt(start + 36).toLong() and 0xFFFFFFFFL
+                        // Zero-fill sections have no bytes in the file.
+                        if (fileOffset > 0 && length > 0) {
+                            firstContent = minOf(firstContent, fileOffset.toInt())
+                        }
+                    }
                 }
             }
             position += commandSize
         }
-        val ceiling = if (firstSection == Int.MAX_VALUE) size else firstSection
-        return (ceiling - used).coerceAtLeast(0)
+        return (firstContent - used).coerceAtLeast(0)
     }
 
     private companion object {

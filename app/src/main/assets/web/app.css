@@ -40,12 +40,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .item:last-child{border-bottom:0}
 .item .title{font-weight:500}
 .tag{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--line);color:var(--muted);margin-left:6px}
-.progress{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
-.progress>div{height:100%;background:var(--accent);transition:width .3s}
+.progress{position:relative;max-width:100%;height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+.progress>div{max-width:100%;height:100%;background:var(--accent);transition:width .3s}
 .busy{display:flex;align-items:center;gap:12px;padding:6px 20px;background:var(--card);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
 .busy .bar{width:120px;height:4px;background:var(--line);border-radius:4px;overflow:hidden;position:relative}
-.indeterminate{position:absolute;height:100%;width:40%;background:var(--accent);animation:slide 1.2s infinite ease-in-out}
-@keyframes slide{0%{left:-40%}100%{left:100%}}
+.indeterminate{position:absolute;left:0;top:0;height:100%;width:40%;background:var(--accent);animation:slide 1.2s infinite ease-in-out}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
 ol{margin:0;padding-left:20px;display:grid;gap:4px}
 .logs{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .logs .WARN{color:var(--warn)}.logs .ERROR{color:var(--err)}.logs .DEBUG{color:var(--muted)}

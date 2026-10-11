@@ -301,9 +301,11 @@
       field("Size", mb(ipa.sizeBytes))] : [h("p", { class: "muted", text: "No IPA has been chosen yet." })]));
     dyn.progress.hidden = !s.step;
     if (s.step) {
-      const pct = s.step.percent;
+      // Only a real number is a percentage; anything else is "no figure yet".
+      const raw = s.step.percent;
+      const pct = typeof raw === "number" && isFinite(raw) ? Math.min(100, Math.max(0, Math.round(raw))) : null;
       fill(dyn.progress, h("h2", { text: "Progress" }), h("p", { text: s.step.label }),
-        h("div", { class: "progress" }, pct === null ? h("div", { class: "indeterminate", style: "position:relative;width:40%" }) : h("div", { style: "width:" + pct + "%" })));
+        h("div", { class: "progress" }, pct === null ? h("div", { class: "indeterminate" }) : h("div", { style: "width:" + pct + "%" })));
     }
     const o = s.lastOutcome;
     dyn.outcome.hidden = !o;

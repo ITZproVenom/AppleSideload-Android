@@ -19,6 +19,8 @@ object MachOSigner {
     /** Space reserved for the signature; the real one is padded to fit. */
     private const val RESERVE_SLACK = 20_000
     private const val SEGMENT_ALIGN = 0x4000L
+    private const val LC_CODE_SIGNATURE = 0x1D
+    private const val LC_CODE_SIGNATURE_SIZE = 16
 
     interface SignatureBuilder {
         /**
@@ -47,17 +49,21 @@ object MachOSigner {
 
     private fun signSlice(slice: MachOSlice, builder: SignatureBuilder): ByteArray {
         val original = slice.bytes()
-        if (slice.codeSignatureCommandOffset < 0) {
+        // An executable linked unsigned has no LC_CODE_SIGNATURE. The linker
+        // leaves padding after the load commands, and codesign, ldid and
+        // zsign all add the command there; it needs sixteen bytes.
+        val addCommand = slice.codeSignatureCommandOffset < 0
+        if (addCommand && slice.freeHeaderSpace() < LC_CODE_SIGNATURE_SIZE) {
             throw SigningException(
                 operation = "signing the executable",
-                reason = "it has no LC_CODE_SIGNATURE load command and there is no safe way " +
-                    "to add one without relinking",
-                limitation = "an executable built without a signature placeholder cannot be " +
-                    "signed in place",
-                alternative = "use an IPA built by Xcode or exported from another signer, " +
-                    "which always carries the placeholder"
+                reason = "it has no LC_CODE_SIGNATURE load command and its header has " +
+                    "${slice.freeHeaderSpace()} free bytes, not the $LC_CODE_SIGNATURE_SIZE one needs",
+                limitation = "an executable linked without header padding cannot be signed in place",
+                alternative = "use an IPA built by Xcode or exported from another signer"
             )
         }
+        val commandOffset = if (addCommand) slice.headerSize + slice.commandsSize
+        else slice.codeSignatureCommandOffset
 
         // Everything from the old signature onwards goes.
         val codeEnd = slice.codeSignatureOffset.takeIf { it in 1..original.size }
@@ -71,7 +77,8 @@ object MachOSigner {
         val image = ByteArray(codeLimit + reserved)
         System.arraycopy(original, 0, image, 0, minOf(codeEnd, original.size))
 
-        patchCodeSignature(slice, image, codeLimit, reserved)
+        if (addCommand) insertCodeSignatureCommand(slice, image, commandOffset)
+        patchCodeSignature(slice, image, commandOffset, codeLimit, reserved)
         patchLinkedit(slice, image, codeLimit + reserved)
 
         val signature = builder.build(image, codeLimit)
@@ -91,16 +98,27 @@ object MachOSigner {
         return image
     }
 
+    /** Writes an empty LC_CODE_SIGNATURE after the last load command and counts it in the header. */
+    private fun insertCodeSignatureCommand(slice: MachOSlice, image: ByteArray, at: Int) {
+        val order = if (slice.isLittleEndian) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+        val buffer = ByteBuffer.wrap(image).order(order)
+        buffer.putInt(at, LC_CODE_SIGNATURE)
+        buffer.putInt(at + 4, LC_CODE_SIGNATURE_SIZE)
+        buffer.putInt(16, slice.commandCount + 1)
+        buffer.putInt(20, slice.commandsSize + LC_CODE_SIGNATURE_SIZE)
+    }
+
     private fun patchCodeSignature(
         slice: MachOSlice,
         image: ByteArray,
+        commandOffset: Int,
         offset: Int,
         size: Int
     ) {
         val order = if (slice.isLittleEndian) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
         val buffer = ByteBuffer.wrap(image).order(order)
-        buffer.putInt(slice.codeSignatureCommandOffset + 8, offset)
-        buffer.putInt(slice.codeSignatureCommandOffset + 12, size)
+        buffer.putInt(commandOffset + 8, offset)
+        buffer.putInt(commandOffset + 12, size)
     }
 
     private fun patchLinkedit(slice: MachOSlice, image: ByteArray, fileEnd: Int) {

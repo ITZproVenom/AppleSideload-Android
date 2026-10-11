@@ -158,7 +158,7 @@ object StateJson {
         }
         put("kind", kind)
         put("label", label)
-        put("percent", percent.orNull())
+        put("percent", percent?.coerceIn(0, 100).orNull())
     }
 
     fun logs(lines: List<LogLine>, after: Long, limit: Int = 500): JSONObject {
