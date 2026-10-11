@@ -167,8 +167,13 @@ class AfcClient(private val transport: Transport) : Closeable {
         headerLength: Int = 0,
         expect: Long? = null
     ): ByteArray {
-        val thisLength = HEADER + headerLength
         val entireLength = HEADER + payload.size
+        // this_length covers the operation's own arguments - the mode and path of
+        // an open, the handle of a write - and only file contents run past it.
+        // A request with no trailing contents has the two lengths equal; the
+        // device cannot find the path of an open otherwise and answers "invalid
+        // argument".
+        val thisLength = if (headerLength > 0) HEADER + headerLength else entireLength
         val packet = ByteArray(entireLength)
         val buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
         buffer.put(MAGIC)
