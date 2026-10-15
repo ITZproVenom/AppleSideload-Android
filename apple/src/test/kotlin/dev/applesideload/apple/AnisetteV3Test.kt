@@ -399,6 +399,8 @@ class AnisetteV3Test {
         val windowsInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
         assertEquals(windowsInfo, data.clientInfo)
         assertEquals("akd/1.0 CFNetwork/808.1.4", data.userAgent)
+        val deviceId = lowerUuid(identity.identifier)
+        assertEquals(deviceId.lowercase(), deviceId)
         for (path in listOf("/midStart", "/midFinish")) {
             val call = apple.requests.single { it.path == path }
             assertEquals("POST", call.method)
