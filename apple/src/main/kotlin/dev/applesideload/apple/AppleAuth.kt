@@ -110,23 +110,37 @@ class AppleAuth(
 
     fun signIn(appleId: String, password: String): AuthResult {
         Log.i(LogTag.APPLE, "signing in to Apple as ${Redaction.apply(appleId)}")
-        val data = anisette.fetch()
+        var data = anisette.fetch()
         val service = gsUrl("gsService")
-        val cpd = clientProvidedData(data)
+        var cpd = clientProvidedData(data)
 
         val srp = SrpClient()
-        val first = grandSlamRequest(
+        fun initialRequest() = request(
+            "A2k" to Plist.Data(srp.publicABytes),
+            "cpd" to cpd,
+            "o" to Plist.Str("init"),
+            "ps" to Plist.Arr(listOf(Plist.Str("s2k"), Plist.Str("s2k_fo"))),
+            "u" to Plist.Str(appleId)
+        )
+        var firstReply = rawGrandSlamRequest(
             service,
-            request(
-                "A2k" to Plist.Data(srp.publicABytes),
-                "cpd" to cpd,
-                "o" to Plist.Str("init"),
-                "ps" to Plist.Arr(listOf(Plist.Str("s2k"), Plist.Str("s2k_fo"))),
-                "u" to Plist.Str(appleId)
-            ),
+            initialRequest(),
             step = "the first sign-in step",
             headers = data.clientHeaders()
         )
+        val sim = resyncPayload(firstReply)
+        if (sim != null) {
+            Log.i(LogTag.APPLE, "Apple requested an anisette resync; applying it through the configured server")
+            data = anisette.resync(sim)
+            cpd = clientProvidedData(data)
+            firstReply = rawGrandSlamRequest(
+                service,
+                initialRequest(),
+                step = "the first sign-in step after anisette resync",
+                headers = data.clientHeaders()
+            )
+        }
+        val first = checkGrandSlamResponse(firstReply, "the first sign-in step")
         val salt = first["s"]?.asData ?: throw incomplete("an SRP salt")
         val serverB = first["B"]?.asData ?: throw incomplete("an SRP challenge")
         val iterations = first["i"]?.asInt ?: throw incomplete("an iteration count")
@@ -446,29 +460,36 @@ class AppleAuth(
         throw AppleAuthException(0, "Apple's sign-in service could not be reached: ${error.message}")
     }
 
-    /** One Grand Slam request, retried on 429, with Apple's error turned into an [AppleAuthException]. */
+    private fun rawGrandSlamRequest(
+        url: String,
+        body: Plist,
+        step: String,
+        headers: Map<String, String> = emptyMap()
+    ): Plist = try {
+        grandSlam.plistRequest(url, body, headers, retry429 = true)
+    } catch (error: HttpStatusException) {
+        throw AppleAuthException(
+            error.code,
+            "Apple's sign-in service answered $step with HTTP ${error.code} (${error.reason})",
+            limitation = when {
+                error.code == 429 -> "Apple limits how often an account may sign in"
+                error.code >= 500 -> "Apple's service is refusing or failing this request"
+                else -> null
+            },
+            alternative = if (error.code == 429 || error.code >= 500) "wait a few minutes and try again" else null
+        )
+    } catch (error: IOException) {
+        throw AppleAuthException(0, "$step failed: ${error.message}")
+    }
+
     private fun grandSlamRequest(
         url: String,
         body: Plist,
         step: String,
         headers: Map<String, String> = emptyMap()
-    ): Plist {
-        val response = try {
-            grandSlam.plistRequest(url, body, headers, retry429 = true)
-        } catch (error: HttpStatusException) {
-            throw AppleAuthException(
-                error.code,
-                "Apple's sign-in service answered $step with HTTP ${error.code} (${error.reason})",
-                limitation = when {
-                    error.code == 429 -> "Apple limits how often an account may sign in"
-                    error.code >= 500 -> "Apple's service is refusing or failing this request"
-                    else -> null
-                },
-                alternative = if (error.code == 429 || error.code >= 500) "wait a few minutes and try again" else null
-            )
-        } catch (error: IOException) {
-            throw AppleAuthException(0, "$step failed: ${error.message}")
-        }
+    ): Plist = checkGrandSlamResponse(rawGrandSlamRequest(url, body, step, headers), step)
+
+    private fun checkGrandSlamResponse(response: Plist, step: String): Plist {
         val status = response["Status"] ?: response
         val code = status["ec"]?.asInt ?: 0
         if (code != 0) {
@@ -476,19 +497,31 @@ class AppleAuth(
                 code,
                 status["em"]?.asString ?: status["ed"]?.asString ?: "no further detail was given",
                 limitation = when (code) {
-                    -20101 -> "the Apple ID or password is wrong"
+                    -20101, -20970 -> "the Apple ID or password is wrong"
                     -22406 -> "Apple rejected the attestation headers as invalid"
                     -80045 -> "Apple did not accept the anisette/client identity used by this request"
                     else -> null
                 },
                 alternative = when (code) {
                     -22406 -> "pick another anisette source in Settings"
-                    -80045 -> "check the Android client profile in Settings, try another v3 anisette source, and wait before retrying"
+                    -80045 -> "check the Windows client profile in Settings, choose a current v3 anisette source, and wait before retrying"
                     else -> null
                 }
             )
         }
         return response
+    }
+
+    /** Apple hsc 434 asks the v3 anisette source to resync this identity once. */
+    private fun resyncPayload(response: Plist): String? {
+        val status = response["Status"] ?: return null
+        if (status["hsc"]?.asInt != 434) return null
+        val value = status["X-Apple-I-MD-DATA"] ?: return null
+        return when (value) {
+            is Plist.Str -> value.value
+            is Plist.Data -> java.util.Base64.getEncoder().encodeToString(value.value)
+            else -> null
+        }
     }
 
     /** isideload's client-provided data: fixed fields plus the attestation headers. */

@@ -45,6 +45,8 @@ class AppleAuthTest {
         val requests = CopyOnWriteArrayList<Recorded>()
         @Volatile var secondFactor: String? = null
         @Volatile var trusted = false
+        @Volatile var resyncFirstInit = false
+        @Volatile var resyncDataAsPlistData = false
         val initStatuses = ConcurrentLinkedDeque<Int>()
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iterations = 1000
@@ -127,6 +129,18 @@ class AppleAuthTest {
                         val page = "<html>\r\n<head><title>$status ${if (status == 503) "Service Temporarily Unavailable" else "Too Many Requests"}</title></head>\r\n" +
                             "<body>\r\n<center><h1>$status</h1></center>\r\n<hr><center>Apple</center>\r\n</body>\r\n</html>\r\n"
                         reply(exchange, status, "text/html", page.toByteArray())
+                        return
+                    }
+                    if (resyncFirstInit) {
+                        resyncFirstInit = false
+                        plist(exchange, Plist.dict("Response" to Plist.dict(
+                            "Status" to Plist.dict(
+                                "ec" to Plist.Num(-22421),
+                                "em" to Plist.Str("This action could not be completed. Try again."),
+                                "hsc" to Plist.Num(434),
+                                "X-Apple-I-MD-DATA" to if (resyncDataAsPlistData) Plist.Data("sim-data".toByteArray()) else Plist.Str("c2ltLWRhdGE=")
+                            )
+                        )))
                         return
                     }
                     if (request["u"]?.asString != email) {
@@ -276,12 +290,26 @@ class AppleAuthTest {
     }
 
     private object AndroidAnisette : AnisetteProvider {
-        override val name = "Android-profile test data"
+        override val name = "legacy Android-profile test data"
         override fun isAvailable() = true
         override fun fetch() = FixedAnisette.fetch().copy(
             clientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
             userAgent = "akd/1.0 CFNetwork/808.1.4"
         )
+    }
+
+    private class ResyncAnisette : AnisetteProvider {
+        override val name = "Windows-profile test data"
+        override fun isAvailable() = true
+        var seenSim: String? = null
+        override fun fetch() = FixedAnisette.fetch().copy(
+            clientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>",
+            userAgent = "akd/1.0 CFNetwork/808.1.4"
+        )
+        override fun resync(sim: String): AnisetteData {
+            seenSim = sim
+            return fetch().copy(oneTimePassword = "OTP-RESYNC")
+        }
     }
 
     private fun auth(apple: FakeApple, anisette: AnisetteProvider = FixedAnisette) = AppleAuth(
@@ -291,6 +319,32 @@ class AppleAuthTest {
     )
 
     private fun gs(apple: FakeApple) = apple.requests.filter { it.path == "/gs" }
+
+    @Test
+    fun appleHsc434ResyncsV3IdentityAndRetriesTheSameSrpInitOnce() = FakeApple().use { apple ->
+        apple.resyncFirstInit = true
+        val anisette = ResyncAnisette()
+        assertTrue(auth(apple, anisette).signIn(apple.email, apple.password) is AuthResult.Success)
+
+        assertEquals("c2ltLWRhdGE=", anisette.seenSim)
+        val initCalls = apple.requests.filter { it.path == "/gs" && XmlPlist.parse(it.body)["Request"]?.get("o")?.asString == "init" }
+        assertEquals(2, initCalls.size)
+        val firstRequest = XmlPlist.parse(initCalls[0].body)["Request"]!!
+        val retriedRequest = XmlPlist.parse(initCalls[1].body)["Request"]!!
+        assertEquals(firstRequest["A2k"]?.asData?.toList(), retriedRequest["A2k"]?.asData?.toList())
+        assertEquals("OTP-VALUE", firstRequest["cpd"]?.get("X-Apple-I-MD")?.asString)
+        assertEquals("OTP-RESYNC", retriedRequest["cpd"]?.get("X-Apple-I-MD")?.asString)
+        assertTrue(initCalls.all { it.headers["x-mme-client-info"].orEmpty().contains("<Windows;") })
+    }
+
+    @Test
+    fun binaryResyncPayloadIsBase64EncodedForTheServer() = FakeApple().use { apple ->
+        apple.resyncFirstInit = true
+        apple.resyncDataAsPlistData = true
+        val anisette = ResyncAnisette()
+        assertTrue(auth(apple, anisette).signIn(apple.email, apple.password) is AuthResult.Success)
+        assertEquals("c2ltLWRhdGE=", anisette.seenSim)
+    }
 
     @Test
     fun signsInAndFetchesTheDeveloperToken() = FakeApple().use { apple ->
@@ -379,12 +433,12 @@ class AppleAuthTest {
     @Test
     fun aCodeByTextMessage() = FakeApple().use { apple ->
         apple.secondFactor = "secondaryAuth"
-        val auth = auth(apple, AndroidAnisette)
+        val auth = auth(apple, ResyncAnisette())
         val needed = auth.signIn(apple.email, apple.password) as AuthResult.PhoneCodeRequired
         assertEquals(listOf(TrustedPhoneNumber(2, "+1 (•••) •••-••12")), needed.numbers)
         assertEquals("application/json", apple.requests.single { it.path == "/auth" }.headers["accept"])
-        val androidSignIn = apple.requests.first { it.path == "/gs" }
-        assertTrue(androidSignIn.headers["x-mme-client-info"].orEmpty().contains("<Android;"))
+        val windowsSignIn = apple.requests.first { it.path == "/gs" }
+        assertTrue(windowsSignIn.headers["x-mme-client-info"].orEmpty().contains("<Windows;"))
         assertEquals(GrandSlam.CLIENT_INFO, apple.requests.single { it.path == "/auth" }.headers["x-mme-client-info"])
 
         auth.requestPhoneCode(needed.pending, 2)

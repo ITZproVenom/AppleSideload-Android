@@ -85,7 +85,9 @@ object AnisetteServers {
         Server("SteX", "https://ani.xu30.top"),
         Server("iDH Server", "https://ani.idevicehacked.com"),
         Server("neoarz", "https://ani.neoarz.com"),
-        Server("crystall1nedev", "https://anisette.crystall1ne.dev")
+        Server("crystall1nedev", "https://anisette.crystall1ne.dev"),
+        Server("SideStore (Windows ADI)", "https://win.ani.sidestore.io"),
+        Server("jkcoxson (Windows ADI)", "https://ani.jkcoxson.com")
     )
 
     val default: Server get() = bundled.first()
@@ -116,6 +118,13 @@ interface AnisetteProvider {
 
     /** Throws [AnisetteUnavailable] rather than returning anything invented. */
     fun fetch(): AnisetteData
+
+    /** Applies Apple's hsc 434 resync payload to this identity when supported. */
+    fun resync(sim: String): AnisetteData = throw AnisetteUnavailable(
+        detail = "the selected anisette source does not support identity resync",
+        limitation = "Apple requested a v3 anisette resync that this provider cannot perform",
+        alternative = "choose a supported anisette v3 server"
+    )
 }
 
 /**
@@ -280,10 +289,9 @@ class FileAnisetteStore(private val file: File) : AnisetteStore {
  * An anisette source at an address from Settings.
  *
  * With a v3 source, the app provisions and persists its identity through that
- * server. For Android-backed anisette, [useAndroidClientInfo] makes Apple see
- * the Android client profile that matches the generated tokens; Apple second-
- * factor endpoints continue to use Grand Slam's Mac profile, as SideInstaller
- * 1.5.1 does. A source without /v3 uses the legacy shared v1 request.
+ * server. By default Apple sees the Windows/iTunes profile used by SideInstaller
+ * 1.5.2; the optional legacy Android profile is for older servers only. Apple's
+ * 2FA endpoints continue to use the separate Mac profile.
  */
 class RemoteAnisetteProvider(
     private val baseUrl: String = AnisetteServers.default.address,
@@ -313,8 +321,8 @@ class RemoteAnisetteProvider(
         if (useAndroidClientInfo && info == null) {
             throw AnisetteUnavailable(
                 detail = "the selected source does not expose an anisette v3 interface",
-                limitation = "the Android client profile is supported with v3 anisette sources",
-                alternative = "choose an anisette v3 server, or turn this option off"
+                limitation = "the legacy Android client profile requires v3 anisette data",
+                alternative = "choose an anisette v3 server or turn off the legacy profile"
             )
         }
         return if (info != null) fetchV3() else fetchV1()
@@ -345,12 +353,37 @@ class RemoteAnisetteProvider(
         } else SourceInfo(clientInfo, json?.optString("user_agent").orEmpty())
     }
 
-    private fun selectedClientHeaders(): Map<String, String> {
-        if (!useAndroidClientInfo) return emptyMap()
-        return mapOf(
-            "X-Mme-Client-Info" to ANDROID_CLIENT_INFO,
-            "User-Agent" to ANDROID_USER_AGENT
+    private fun selectedClientHeaders(): Map<String, String> = if (useAndroidClientInfo) {
+        mapOf("X-Mme-Client-Info" to ANDROID_CLIENT_INFO, "User-Agent" to ANDROID_USER_AGENT)
+    } else {
+        mapOf("X-Mme-Client-Info" to WINDOWS_CLIENT_INFO, "User-Agent" to WINDOWS_USER_AGENT)
+    }
+
+    override fun resync(sim: String): AnisetteData = synchronized(LOCK) {
+        if (sourceInfo == null) {
+            throw AnisetteUnavailable(
+                detail = "the selected source has no v3 anisette resync interface",
+                limitation = "Apple's Windows ADI resync requires a v3 source",
+                alternative = "choose an anisette v3 server"
+            )
+        }
+        val identity = store.load() ?: throw AnisetteUnavailable(
+            detail = "there is no provisioned identity to resync",
+            limitation = "Apple's resync payload applies to an existing anisette v3 identity",
+            alternative = "retry sign-in to provision an identity"
         )
+        val data = headersFor(identity, sim)
+        when (data) {
+            is HeadersReply.Refused -> throw AnisetteUnavailable(
+                detail = "the source refused Apple's identity resync (${data.message})",
+                limitation = "the anisette server could not apply Apple's resync payload",
+                alternative = "try another v3 anisette server"
+            )
+            is HeadersReply.Headers -> anisetteData(identity, data).also {
+                CACHE["$base|$useAndroidClientInfo"] = Cached(it, System.nanoTime())
+                Log.i(LogTag.APPLE, "the anisette source applied Apple's identity resync")
+            }
+        }
     }
 
     private fun fetchV3(): AnisetteData = synchronized(LOCK) {
@@ -378,35 +411,41 @@ class RemoteAnisetteProvider(
                 alternative = "try again, or pick another anisette source in Settings"
             )
             is HeadersReply.Headers -> {
-                Log.i(LogTag.APPLE, if (useAndroidClientInfo) "attestation data came from the configured source (v3; Android client profile)" else "attestation data came from the configured source (v3, this phone's own identity)")
-                AnisetteData(
-                    oneTimePassword = reply.oneTimePassword,
-                    machineId = reply.machineId,
-                    routingInfo = reply.routingInfo,
-                    deviceId = identity.deviceId,
-                    clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else null,
-                    userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else null
-                ).also { CACHE[cacheKey] = Cached(it, System.nanoTime()) }
+                Log.i(LogTag.APPLE, if (useAndroidClientInfo) "attestation data came from the configured source (v3; legacy Android client profile)" else "attestation data came from the configured source (v3; Windows client profile)")
+                anisetteData(identity, reply).also { CACHE[cacheKey] = Cached(it, System.nanoTime()) }
             }
         }
     }
+
+    private fun anisetteData(identity: AnisetteIdentity, reply: HeadersReply.Headers) = AnisetteData(
+        oneTimePassword = reply.oneTimePassword,
+        machineId = reply.machineId,
+        routingInfo = reply.routingInfo,
+        deviceId = identity.deviceId,
+        clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else WINDOWS_CLIENT_INFO,
+        userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else WINDOWS_USER_AGENT
+    )
 
     private sealed class HeadersReply {
         class Headers(val oneTimePassword: String, val machineId: String, val routingInfo: String) : HeadersReply()
         class Refused(val message: String) : HeadersReply()
     }
 
-    private fun headersFor(identity: AnisetteIdentity): HeadersReply {
+    private fun headersFor(identity: AnisetteIdentity, sim: String? = null): HeadersReply {
         val body = JSONObject()
             .put("identifier", identity.identifierBase64)
             .put("adi_pb", identity.adiPb)
-            .toString()
+        if (sim != null) {
+            body.put("sim", sim)
+                .put("device_id", identity.deviceId)
+                .put("md_lu", identity.localUserId)
+        }
         val response = try {
             http.request(
                 url = "$base/v3/get_headers",
                 method = "POST",
                 headers = mapOf("Content-Type" to "application/json", "Accept" to "application/json"),
-                body = body.toByteArray(Charsets.UTF_8)
+                body = body.toString().toByteArray(Charsets.UTF_8)
             )
         } catch (error: IOException) {
             throw unreachable(error)
@@ -616,7 +655,9 @@ class RemoteAnisetteProvider(
             machineId = machine,
             routingInfo = field("X-Apple-I-MD-RINFO", "routing_info") ?: "17106176",
             deviceId = field("X-Mme-Device-Id", "device_id") ?: deviceId,
-            extraHeaders = extras
+            extraHeaders = extras,
+            clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else WINDOWS_CLIENT_INFO,
+            userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else WINDOWS_USER_AGENT
         )
     }
 
@@ -626,9 +667,13 @@ class RemoteAnisetteProvider(
         /** One identity is made at a time, however many sign-in steps ask at once. */
         private val LOCK = Any()
 
-        /** SideInstaller v1.5.0: Apple's Android anisette data must identify as Android. */
-        private const val ANDROID_CLIENT_INFO = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-        private const val ANDROID_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
+        /** SideInstaller v1.5.2: Windows/iTunes works with current Android and Windows ADI servers. */
+        const val WINDOWS_CLIENT_INFO = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        const val WINDOWS_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
+
+        /** Earlier Android profile retained only as a troubleshooting fallback. */
+        const val ANDROID_CLIENT_INFO = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        const val ANDROID_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
 
         /** The last v3 answer per source and profile mode, reused for up to a minute. */
         private val CACHE = ConcurrentHashMap<String, Cached>()

@@ -18,10 +18,11 @@ notes of the next release.
   implementation, checked against values computed with it.
 - The app sets up its own device identity with the configured anisette server
   (anisette v3) and keeps it on the phone. Apple sees the same identity on
-  later sign-ins. Since 12 October 2026, Apple has required the client profile
-  to match the Android-based anisette data; the app now identifies as the
-  Android client for sign-in and developer requests. Legacy anisette sources
-  can keep using the previous profile via Settings.
+  later sign-ins. The default client profile is now Windows/iTunes, matching
+  SideInstaller 1.5.2; if a Windows-ADI server requests hsc 434, the app sends
+  its resync payload back to that same anisette server and retries the initial
+  sign-in once. No computer or extra anisette-generating device is required.
+  The older Android client profile remains an optional compatibility setting.
 - Apple refuses second-factor endpoints when they identify as Android, so
   trusted-device and phone-code requests use the Mac client profile, matching
   SideInstaller 1.5.1. SMS verification can use a trusted phone number; no
@@ -31,6 +32,9 @@ notes of the next release.
 - When Apple is busy (*429 Too Many Requests*), the app waits and tries twice
   more. Apple's error pages show as a short sentence with the status instead
   of an XML parser error.
+- Apple now returning error `-20970` for an unrecognized Apple ID maps to the
+  incorrect-credentials guidance. Developer-service error `2160` now tells
+  users to verify their Apple Account email at account.apple.com.
 
 ### Fixes
 - Error names in the Activity log stay readable in release builds. The code

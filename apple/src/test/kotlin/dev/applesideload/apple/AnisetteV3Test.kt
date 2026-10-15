@@ -338,7 +338,7 @@ class AnisetteV3Test {
         FakeSource().use { source -> FakeAppleProvisioning().use { apple -> block(source, apple) } }
 
     @Test
-    fun androidProfileMatchesTheAnisetteDataOnProvisioningRequests() = both { source, apple ->
+    fun legacyAndroidProfileMatchesItsAnisetteDataOnProvisioningRequests() = both { source, apple ->
         val data = provider(source, apple, MemoryAnisetteStore(), useAndroidClientInfo = true).fetch()
         val androidInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
         val userAgent = "akd/1.0 CFNetwork/808.1.4"
@@ -367,6 +367,25 @@ class AnisetteV3Test {
     }
 
     @Test
+    fun v3ResyncSendsApplePayloadAndStableIdentityToTheConfiguredServer() = both { source, apple ->
+        val store = MemoryAnisetteStore()
+        val provider = provider(source, apple, store)
+        val first = provider.fetch()
+        val refreshed = provider.resync("c2ltLWRhdGE=")
+        val identity = checkNotNull(store.load())
+        val request = source.headerRequests.last()
+
+        assertEquals("c2ltLWRhdGE=", request.optString("sim"))
+        assertEquals(identity.deviceId, request.optString("device_id"))
+        assertEquals(identity.localUserId, request.optString("md_lu"))
+        assertEquals(identity.identifierBase64, request.optString("identifier"))
+        assertEquals(identity.adiPb, request.optString("adi_pb"))
+        assertEquals(first.deviceId, refreshed.deviceId)
+        assertEquals("OTP-2", refreshed.oneTimePassword)
+        assertTrue(source.problems.toString(), source.problems.isEmpty())
+    }
+
+    @Test
     fun provisionsThePhonesOwnIdentityThroughTheSource() = both { source, apple ->
         val store = MemoryAnisetteStore()
         val data = provider(source, apple, store).fetch()
@@ -376,8 +395,10 @@ class AnisetteV3Test {
         assertEquals(1, source.sessions.get())
         assertEquals(Base64.getEncoder().encodeToString(identity.identifier), source.identifiers.single())
 
-        // Apple's two calls carry the new identity, in lower case as isideload sends it,
-        // and present the client as macOS's akd rather than the Xcode the source describes.
+        // Apple provisioning calls use the same Windows/iTunes identity as login.
+        val windowsInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        assertEquals(windowsInfo, data.clientInfo)
+        assertEquals("akd/1.0 CFNetwork/808.1.4", data.userAgent)
         val deviceId = lowerUuid(identity.identifier)
         assertEquals(deviceId.lowercase(), deviceId)
         for (path in listOf("/midStart", "/midFinish")) {
@@ -385,8 +406,8 @@ class AnisetteV3Test {
             assertEquals("POST", call.method)
             assertEquals(sha256Hex(identity.identifier), call.headers["x-apple-i-md-lu"])
             assertEquals(deviceId, call.headers["x-mme-device-id"])
-            assertEquals(GrandSlam.CLIENT_INFO, call.headers["x-mme-client-info"])
-            assertEquals(GrandSlam.USER_AGENT, call.headers["user-agent"])
+            assertEquals(windowsInfo, call.headers["x-mme-client-info"])
+            assertEquals("akd/1.0 CFNetwork/808.1.4", call.headers["user-agent"])
         }
         // Each side got the other's answers unchanged.
         assertEquals(CPIM, PlistReader.parse(apple.requests.single { it.path == "/midFinish" }.body)["Request"]?.get("cpim")?.asString)
