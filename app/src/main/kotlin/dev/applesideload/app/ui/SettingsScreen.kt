@@ -190,10 +190,10 @@ private fun AnisetteCard(
             }
         }
         SwitchRow(
-            title = "Identify as Android for Apple sign-in",
+            title = "Use legacy Android client profile",
             checked = settings.androidClientProfile,
             onCheckedChange = onAndroidClientProfile,
-            subtitle = "Use the Android client profile that matches anisette v3 data. This uses the configured anisette server only—no extra device. Turn off only for legacy sources or if this profile fails."
+            subtitle = "For older anisette setups only. The default Windows/iTunes profile is the current SideInstaller-compatible mode and uses the selected anisette server only—no extra device."
         )
         Text(
             "In use: ${settings.effectiveAnisetteAddress}",
