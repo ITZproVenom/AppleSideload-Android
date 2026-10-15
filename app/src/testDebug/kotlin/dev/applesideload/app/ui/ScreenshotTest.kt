@@ -64,7 +64,7 @@ class ScreenshotTest {
 
     @Composable
     private fun Settings() = SettingsScreen(
-        Fixtures.ready, Fixtures.settings, Fixtures.web, 342, "0.1.0 (build 20)", {}, {}, {}, {}, {}
+        Fixtures.ready, Fixtures.settings, Fixtures.web, 342, "0.1.0 (build 20)", {}, {}, {}, {}, {}, {}
     )
 
     @Test
