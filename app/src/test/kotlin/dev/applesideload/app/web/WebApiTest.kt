@@ -44,11 +44,11 @@ private class RecordingControls : Controls {
     var uploaded: File? = null
     var anisette = ""
     var wifi = true
-    var androidClientProfile = false
+    var androidProfile = false
 
     override val state: StateFlow<UiState> get() = mutableState
     override val logs: StateFlow<List<LogLine>> get() = mutableLogs
-    override fun settingsSnapshot() = SettingsSnapshot(anisette, anisette.ifBlank { "https://ani.sidestore.io" }, wifi, "me@example.com", "192.168.1.9", androidClientProfile)
+    override fun settingsSnapshot() = SettingsSnapshot(anisette, anisette.ifBlank { "https://ani.sidestore.io" }, wifi, "me@example.com", "192.168.1.9", androidProfile)
 
     private fun record(call: String): Action {
         calls += call
@@ -76,7 +76,7 @@ private class RecordingControls : Controls {
     override fun installSource(source: InstallSource) = record("source:${source.name}")
     override fun install() = record("install")
     override fun setAnisetteAddress(address: String) { anisette = address; calls += "anisette:$address" }
-    override fun setAndroidClientProfile(enabled: Boolean) { androidClientProfile = enabled; calls += "android-profile:$enabled" }
+    override fun setAndroidClientProfile(enabled: Boolean) { androidProfile = enabled; calls += "android-profile:$enabled" }
     override fun setWifiDiscovery(enabled: Boolean) { wifi = enabled; calls += "wifi:$enabled" }
     override fun exportLogs() = "exported log"
 }
