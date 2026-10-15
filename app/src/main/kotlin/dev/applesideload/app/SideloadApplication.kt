@@ -29,7 +29,7 @@ class Settings(context: Context) {
         get() = anisetteAddress.ifBlank { AnisetteServers.default.address }
 
     var androidClientProfile: Boolean
-        get() = preferences.getBoolean(KEY_ANDROID_PROFILE, true)
+        get() = preferences.getBoolean(KEY_ANDROID_PROFILE, false)
         set(value) = preferences.edit().putBoolean(KEY_ANDROID_PROFILE, value).apply()
 
     var wifiDiscovery: Boolean
