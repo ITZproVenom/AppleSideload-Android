@@ -164,7 +164,16 @@ class SideloadEngine(
             } else {
                 emptyMap()
             }
-            val signer = BundleSigner(identity, profile, extra)
+            // Each extension and watch app is its own App ID, so it is signed
+            // with the profile Apple issued for that identifier.
+            val nestedProfiles = appIds
+                .filter { it.identifier != newBundleId }
+                .associate { appId ->
+                    appId.identifier to ProvisioningProfile(
+                        developer.downloadProvisioningProfile(team.teamId, appId.appIdId)
+                    )
+                }
+            val signer = BundleSigner(identity, profile, extra, nestedProfiles)
             signer.onProgress = { onStep(SideloadStep.Signing(it)) }
             signer.sign(bundle)
 

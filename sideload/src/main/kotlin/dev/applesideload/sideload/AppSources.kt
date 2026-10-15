@@ -96,7 +96,7 @@ class ReleaseDownloader(private val directory: File) {
                         output.write(buffer, 0, read)
                         written += read
                         if (total > 0) {
-                            val percent = ((written * 100) / total).toInt()
+                            val percent = ((written * 100) / total).toInt().coerceIn(0, 100)
                             if (percent != lastPercent) {
                                 lastPercent = percent
                                 onProgress(percent)
