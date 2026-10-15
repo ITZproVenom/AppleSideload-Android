@@ -32,6 +32,21 @@ jobs:
             **/build/reports/tests/**
             **/build/test-results/**
           if-no-files-found: ignore
+      - name: Summarize Gradle failure
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          lines = Path('gradle-output.log').read_text(errors='replace').splitlines() if Path('gradle-output.log').exists() else []
+          needles = ('FAILURE:', 'What went wrong:', 'Execution failed', 'Unresolved reference', 'e: ', 'failed with an exception', 'AssertionFailedError', 'There were failing tests')
+          picked = [line.strip() for line in lines if any(needle in line for needle in needles)]
+          summary = '\n'.join(picked[-25:]) or 'Gradle failed; no recognized diagnostic lines found. See build-diagnostics artifact.'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('## Gradle failure details\n\n```text\n' + summary + '\n```\n')
+          for line in picked[-10:]:
+              print('::error::' + line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'))
+          PY
       - name: Keep the screenshots
         if: always()
         uses: actions/upload-artifact@v4
