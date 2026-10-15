@@ -179,8 +179,16 @@ class AppleAuth(
         val idmsToken = spd["GsIdmsToken"]?.asString ?: throw incomplete("the account token")
         val pending = PendingAuth(appleId, adsid, idmsToken, password)
 
-        when (val au = second["Status"]?.get("au")?.asString) {
-            null, "repair" -> Unit // "repair" only means the account has no two factor set up.
+        val secondStatus = second["Status"]
+        when (val au = secondStatus?.get("au")?.asString) {
+            null -> if (secondStatus?.get("hsc")?.asInt == 409) {
+                // Apple may push a trusted-device OTP automatically and omit
+                // `au`; expose the code prompt instead of failing on the later
+                // developer-token request with -22411.
+                Log.i(LogTag.APPLE, "Apple sent a verification code to a trusted device")
+                return AuthResult.TrustedDeviceCodeRequired(pending)
+            }
+            "repair" -> Unit // "repair" only means the account has no two factor set up.
             "trustedDeviceSecondaryAuth" -> {
                 Log.i(LogTag.APPLE, "Apple wants a code from one of the account's trusted devices")
                 requestTrustedDeviceCode(pending)

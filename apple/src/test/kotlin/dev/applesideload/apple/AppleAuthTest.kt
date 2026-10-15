@@ -48,6 +48,7 @@ class AppleAuthTest {
         @Volatile var resyncFirstInit = false
         @Volatile var resyncDataAsPlistData = false
         @Volatile var bareSessionPayload = false
+        @Volatile var autoTrustedDeviceCode = false
         val initStatuses = ConcurrentLinkedDeque<Int>()
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iterations = 1000
@@ -205,6 +206,7 @@ class AppleAuthTest {
                         doFinal(payload)
                     }
                     val statusFields = linkedMapOf<String, Plist>("ec" to Plist.Num(0))
+                    if (autoTrustedDeviceCode && !trusted) statusFields["hsc"] = Plist.Num(409)
                     val au = secondFactor
                     if (au != null && (au == "repair" || !trusted)) statusFields["au"] = Plist.Str(au)
                     plist(
@@ -353,6 +355,20 @@ class AppleAuthTest {
         val anisette = ResyncAnisette()
         assertTrue(auth(apple, anisette).signIn(apple.email, apple.password) is AuthResult.Success)
         assertEquals("c2ltLWRhdGE=", anisette.seenSim)
+    }
+
+    @Test
+    fun automaticallySentTrustedDeviceCodeShowsPromptBeforeDeveloperToken() = FakeApple().use { apple ->
+        apple.autoTrustedDeviceCode = true
+        val auth = auth(apple)
+        val needed = auth.signIn(apple.email, apple.password)
+        assertTrue(needed is AuthResult.TrustedDeviceCodeRequired)
+        assertTrue("Apple already sent the code; do not send a duplicate", apple.requests.none { it.path == "/tds" })
+
+        val completed = auth.submitTrustedDeviceCode((needed as AuthResult.TrustedDeviceCodeRequired).pending, "123456")
+        assertTrue(completed is AuthResult.Success)
+        assertEquals("123456", apple.requests.last { it.path == "/validate" }.headers["security-code"])
+        assertEquals("DEV-TOKEN", auth.fetchAppToken((completed as AuthResult.Success).session).developerToken)
     }
 
     @Test
