@@ -456,13 +456,15 @@ class AppleAuthTest {
         assertEquals("OTP-VALUE", push.headers["x-apple-i-md"])
         assertEquals(GrandSlam.CLIENT_INFO, push.headers["x-mme-client-info"])
 
-        val rejected = apple.requests.last { it.path == "/validate" }
-        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, rejected.headers["x-mme-client-info"])
         try {
             auth.submitTrustedDeviceCode(pending, "000000")
             fail("a wrong code was accepted")
         } catch (error: AppleAuthException) {
             assertEquals(-21669, error.code)
+            assertEquals(
+                RemoteAnisetteProvider.WINDOWS_CLIENT_INFO,
+                apple.requests.last { it.path == "/validate" }.headers["x-mme-client-info"]
+            )
         }
         val result = auth.submitTrustedDeviceCode(pending, "123456")
         assertTrue(result is AuthResult.Success)
