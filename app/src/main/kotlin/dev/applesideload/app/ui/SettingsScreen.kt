@@ -45,13 +45,14 @@ fun SettingsScreen(
     logLines: Int,
     version: String,
     onAnisetteAddress: (String) -> Unit,
+    onAndroidClientProfile: (Boolean) -> Unit,
     onWifiDiscovery: (Boolean) -> Unit,
     onWebEnabled: (Boolean) -> Unit,
     onWebPort: (Int) -> Unit,
     onNavigate: (Destination) -> Unit
 ) = ScreenColumn {
     WebControllerCard(web, onWebEnabled, onWebPort)
-    AnisetteCard(state, settings, onAnisetteAddress)
+    AnisetteCard(state, settings, onAnisetteAddress, onAndroidClientProfile)
     SectionCard("Discovery", icon = Icons.Filled.Search) {
         SwitchRow(
             title = "Look for iPhones on Wi-Fi",
@@ -138,7 +139,12 @@ private fun WebControllerCard(web: WebStatus, onWebEnabled: (Boolean) -> Unit, o
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AnisetteCard(state: UiState, settings: SettingsSnapshot, onAnisetteAddress: (String) -> Unit) =
+private fun AnisetteCard(
+    state: UiState,
+    settings: SettingsSnapshot,
+    onAnisetteAddress: (String) -> Unit,
+    onAndroidClientProfile: (Boolean) -> Unit
+) =
     SectionCard("Attestation source", icon = Icons.Filled.Dns) {
         var address by rememberSaveable { mutableStateOf(settings.anisetteAddress) }
         val addressValid = address.isBlank() ||
@@ -183,6 +189,12 @@ private fun AnisetteCard(state: UiState, settings: SettingsSnapshot, onAnisetteA
                 )
             }
         }
+        SwitchRow(
+            title = "Identify as Android for Apple sign-in",
+            checked = settings.androidClientProfile,
+            onCheckedChange = onAndroidClientProfile,
+            subtitle = "Use the Android client profile that matches anisette v3 data. This uses the configured anisette server only—no extra device. Turn off only for legacy sources or if this profile fails."
+        )
         Text(
             "In use: ${settings.effectiveAnisetteAddress}",
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),

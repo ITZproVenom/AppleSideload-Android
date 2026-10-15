@@ -215,6 +215,14 @@ class WebApi(
             }
             onMain.call { controls.setAnisetteAddress(address) }
         }
+        if (fields.has("androidClientProfile")) {
+            val enabled = try {
+                fields.getBoolean("androidClientProfile")
+            } catch (_: JSONException) {
+                throw HttpError(400, "androidClientProfile must be true or false.")
+            }
+            onMain.call { controls.setAndroidClientProfile(enabled) }
+        }
         if (fields.has("wifiDiscovery")) {
             val enabled = try {
                 fields.getBoolean("wifiDiscovery")

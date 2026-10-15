@@ -7,6 +7,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.BufferedInputStream
@@ -202,7 +203,6 @@ class AnisetteV3Test {
             "GET /v3/client_info" -> when {
                 !v3 -> 404 to "Not Found"
                 clientInfoStatus != 200 -> clientInfoStatus to "busy"
-                // What public sources publish: Xcode, which the client must not copy.
                 else -> 200 to JSONObject()
                     .put("client_info", "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>")
                     .put("user_agent", "akd/1.0 CFNetwork/808.1.4")
@@ -316,11 +316,17 @@ class AnisetteV3Test {
         }
     }
 
-    private fun provider(source: FakeSource, apple: FakeAppleProvisioning, store: AnisetteStore) = RemoteAnisetteProvider(
+    private fun provider(
+        source: FakeSource,
+        apple: FakeAppleProvisioning,
+        store: AnisetteStore,
+        useAndroidClientInfo: Boolean = false
+    ) = RemoteAnisetteProvider(
         baseUrl = source.base,
         http = Http(timeoutMs = 10_000),
         store = store,
-        grandSlam = GrandSlam(Http(timeoutMs = 10_000), bagUrl = "${apple.base}/lookup", retryDelaysMs = listOf(1, 1))
+        grandSlam = GrandSlam(Http(timeoutMs = 10_000), bagUrl = "${apple.base}/lookup", retryDelaysMs = listOf(1, 1)),
+        useAndroidClientInfo = useAndroidClientInfo
     )
 
     private fun lowerUuid(identifier: ByteArray): String = ByteBuffer.wrap(identifier).let { UUID(it.long, it.long) }.toString()
@@ -330,6 +336,35 @@ class AnisetteV3Test {
 
     private fun both(block: (FakeSource, FakeAppleProvisioning) -> Unit) =
         FakeSource().use { source -> FakeAppleProvisioning().use { apple -> block(source, apple) } }
+
+    @Test
+    fun androidProfileMatchesTheAnisetteDataOnProvisioningRequests() = both { source, apple ->
+        val data = provider(source, apple, MemoryAnisetteStore(), useAndroidClientInfo = true).fetch()
+        val androidInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        val userAgent = "akd/1.0 CFNetwork/808.1.4"
+
+        assertEquals(androidInfo, data.clientInfo)
+        assertEquals(userAgent, data.userAgent)
+        assertEquals(androidInfo, data.clientHeaders()["X-Mme-Client-Info"])
+        assertEquals(userAgent, data.clientHeaders()["User-Agent"])
+        for (path in listOf("/midStart", "/midFinish")) {
+            val call = apple.requests.single { it.path == path }
+            assertEquals(androidInfo, call.headers["x-mme-client-info"])
+            assertEquals(userAgent, call.headers["user-agent"])
+        }
+        assertTrue(source.problems.toString(), source.problems.isEmpty())
+    }
+
+    @Test
+    fun androidProfileRequiresAV3AnisetteSource() = both { source, apple ->
+        source.v3 = false
+        val error = assertThrows(AnisetteUnavailable::class.java) {
+            provider(source, apple, MemoryAnisetteStore(), useAndroidClientInfo = true).fetch()
+        }
+        assertTrue(error.message.orEmpty().contains("does not expose an anisette v3 interface"))
+        assertTrue(source.identifiers.isEmpty())
+        assertTrue(apple.requests.isEmpty())
+    }
 
     @Test
     fun provisionsThePhonesOwnIdentityThroughTheSource() = both { source, apple ->

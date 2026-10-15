@@ -38,7 +38,10 @@ data class AnisetteData(
      * Headers a v1 source adds to its shared data (local user, clock,
      * locale). A v3 identity needs none of them, as in SideInstaller.
      */
-    val extraHeaders: Map<String, String> = emptyMap()
+    val extraHeaders: Map<String, String> = emptyMap(),
+    /** Optional client identity profile matched to these anisette tokens. */
+    val clientInfo: String? = null,
+    val userAgent: String? = null
 ) {
     /** The attestation headers for a Grand Slam or developer request (isideload's get_headers). */
     fun headers(): Map<String, String> = linkedMapOf(
@@ -46,6 +49,12 @@ data class AnisetteData(
         "X-Apple-I-MD" to oneTimePassword,
         "X-Apple-I-MD-M" to machineId
     ).apply { putAll(extraHeaders) }
+
+    /** Match the Apple client profile to the Android anisette tokens. */
+    fun clientHeaders(): Map<String, String> = buildMap {
+        clientInfo?.let { put("X-Mme-Client-Info", it) }
+        userAgent?.let { put("User-Agent", it) }
+    }
 
     /** The tokens stay out of logs. */
     override fun toString(): String = "AnisetteData(deviceId=$deviceId)"
@@ -270,22 +279,20 @@ class FileAnisetteStore(private val file: File) : AnisetteStore {
 /**
  * An anisette source at an address from Settings.
  *
- * A v3 source (every SideStore server is one) is used the way SideStore uses
- * it: this phone makes its own identity once, Apple provisions it through the
- * source, and from then on the source only computes the one-time password
- * for that identity. A source without /v3 gets the old v1 request, whose
- * data belongs to the source's shared identities; that still signs in, but
- * Apple may ask for a code every time, because it sees a different machine.
- *
- * The source never sees the Apple ID or the password: the sign-in itself
- * still happens between this app and Apple.
+ * With a v3 source, the app provisions and persists its identity through that
+ * server. For Android-backed anisette, [useAndroidClientInfo] makes Apple see
+ * the Android client profile that matches the generated tokens; Apple second-
+ * factor endpoints continue to use Grand Slam's Mac profile, as SideInstaller
+ * 1.5.1 does. A source without /v3 uses the legacy shared v1 request.
  */
 class RemoteAnisetteProvider(
     private val baseUrl: String = AnisetteServers.default.address,
     private val deviceId: String = UUID.randomUUID().toString().uppercase(),
     private val http: Http = Http(),
     private val store: AnisetteStore = MemoryAnisetteStore(),
-    private val grandSlam: GrandSlam = GrandSlam(http)
+    private val grandSlam: GrandSlam = GrandSlam(http),
+    /** Use SideInstaller's Android client identity with v3 anisette tokens. */
+    private val useAndroidClientInfo: Boolean = false
 ) : AnisetteProvider {
 
     override val name: String = "anisette source at $baseUrl"
@@ -302,25 +309,26 @@ class RemoteAnisetteProvider(
                 alternative = "enter an address in Settings"
             )
         }
-        return if (speaksV3()) fetchV3() else fetchV1()
+        val info = sourceInfo
+        if (useAndroidClientInfo && info == null) {
+            throw AnisetteUnavailable(
+                detail = "the selected source does not expose an anisette v3 interface",
+                limitation = "the Android client profile is supported with v3 anisette sources",
+                alternative = "choose an anisette v3 server, or turn this option off"
+            )
+        }
+        return if (info != null) fetchV3() else fetchV1()
     }
 
-    /**
-     * Whether the source has the v3 interface.
-     *
-     * Only the answer's presence matters: the client description a source
-     * publishes is not used, because public sources still describe Xcode,
-     * which Apple now refuses (see [GrandSlam.CLIENT_INFO]).
-     */
-    private fun speaksV3(): Boolean {
-        KNOWN[base]?.let { return it }
+    private data class SourceInfo(val clientInfo: String, val userAgent: String)
+
+    private val sourceInfo: SourceInfo? by lazy {
         val response = try {
             http.request("$base/v3/client_info", headers = mapOf("Accept" to "application/json"))
         } catch (error: IOException) {
             throw unreachable(error)
         }
         if (response.code >= 500) {
-            // A v3 source that is failing right now, not one without v3.
             throw AnisetteUnavailable(
                 detail = "the source answered HTTP ${response.code} (${response.reason})",
                 limitation = "the source is having trouble of its own",
@@ -328,16 +336,28 @@ class RemoteAnisetteProvider(
             )
         }
         val json = if (response.code in 200..299) runCatching { JSONObject(response.text) }.getOrNull() else null
-        val v3 = !json?.optString("client_info").isNullOrBlank()
-        if (!v3) Log.i(LogTag.APPLE, "the anisette source has no v3 interface, so its shared v1 data is used")
-        KNOWN[base] = v3
-        return v3
+        // Public v3 servers often advertise Xcode/macOS even though these
+        // headers are generated with Android ADI; that metadata is not used.
+        val clientInfo = json?.optString("client_info").orEmpty()
+        if (clientInfo.isBlank()) {
+            Log.i(LogTag.APPLE, "the anisette source has no v3 interface, so its shared v1 data is used")
+            null
+        } else SourceInfo(clientInfo, json?.optString("user_agent").orEmpty())
+    }
+
+    private fun selectedClientHeaders(): Map<String, String> {
+        if (!useAndroidClientInfo) return emptyMap()
+        return mapOf(
+            "X-Mme-Client-Info" to ANDROID_CLIENT_INFO,
+            "User-Agent" to ANDROID_USER_AGENT
+        )
     }
 
     private fun fetchV3(): AnisetteData = synchronized(LOCK) {
-        var identity = store.load() ?: provision()
-        CACHE[base]?.let { cached ->
-            // isideload keeps one answer for 60 seconds; a sign-in makes several requests.
+        val clientHeaders = selectedClientHeaders()
+        var identity = store.load() ?: provision(clientHeaders)
+        val cacheKey = "$base|$useAndroidClientInfo"
+        CACHE[cacheKey]?.let { cached ->
             if (cached.data.deviceId == identity.deviceId && System.nanoTime() - cached.madeAt < CACHE_NANOS) {
                 return cached.data
             }
@@ -348,7 +368,7 @@ class RemoteAnisetteProvider(
             // identity fixes that, at the price of one more two factor code.
             Log.w(LogTag.APPLE, "the anisette source refused this phone's identity (${reply.message}); making a new one")
             store.clear()
-            identity = provision()
+            identity = provision(clientHeaders)
             reply = headersFor(identity)
         }
         when (reply) {
@@ -358,13 +378,15 @@ class RemoteAnisetteProvider(
                 alternative = "try again, or pick another anisette source in Settings"
             )
             is HeadersReply.Headers -> {
-                Log.i(LogTag.APPLE, "attestation data came from the configured source (v3, this phone's own identity)")
+                Log.i(LogTag.APPLE, if (useAndroidClientInfo) "attestation data came from the configured source (v3; Android client profile)" else "attestation data came from the configured source (v3, this phone's own identity)")
                 AnisetteData(
                     oneTimePassword = reply.oneTimePassword,
                     machineId = reply.machineId,
                     routingInfo = reply.routingInfo,
-                    deviceId = identity.deviceId
-                ).also { CACHE[base] = Cached(it, System.nanoTime()) }
+                    deviceId = identity.deviceId,
+                    clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else null,
+                    userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else null
+                ).also { CACHE[cacheKey] = Cached(it, System.nanoTime()) }
             }
         }
     }
@@ -418,11 +440,11 @@ class RemoteAnisetteProvider(
      * the answers back, as isideload's remote_v3 does. Nothing about the
      * Apple account is involved.
      */
-    private fun provision(): AnisetteIdentity {
+    private fun provision(clientHeaders: Map<String, String>): AnisetteIdentity {
         Log.i(LogTag.APPLE, "setting up this phone's own attestation identity with Apple, through $base")
         val identifier = ByteArray(16).also(SecureRandom()::nextBytes)
         val draft = DraftIdentity(identifier)
-        val headers = mapOf(
+        val headers = clientHeaders + mapOf(
             "X-Apple-I-MD-LU" to draft.localUserId,
             "X-Mme-Device-Id" to draft.deviceId
         )
@@ -604,10 +626,11 @@ class RemoteAnisetteProvider(
         /** One identity is made at a time, however many sign-in steps ask at once. */
         private val LOCK = Any()
 
-        /** What each source address turned out to speak, for this process. */
-        private val KNOWN = ConcurrentHashMap<String, Boolean>()
+        /** SideInstaller v1.5.0: Apple's Android anisette data must identify as Android. */
+        private const val ANDROID_CLIENT_INFO = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        private const val ANDROID_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
 
-        /** The last v3 answer per source, reused for up to a minute. */
+        /** The last v3 answer per source and profile mode, reused for up to a minute. */
         private val CACHE = ConcurrentHashMap<String, Cached>()
         private const val CACHE_NANOS = 60_000_000_000L
     }

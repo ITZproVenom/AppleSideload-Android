@@ -127,6 +127,7 @@ object StateJson {
         put("settings", JSONObject().apply {
             put("anisetteAddress", settings.anisetteAddress)
             put("effectiveAnisetteAddress", settings.effectiveAnisetteAddress)
+            put("androidClientProfile", settings.androidClientProfile)
             put("wifiDiscovery", settings.wifiDiscovery)
             put("lastAppleId", settings.lastAppleId)
             put("lastWirelessAddress", settings.lastWirelessAddress)
