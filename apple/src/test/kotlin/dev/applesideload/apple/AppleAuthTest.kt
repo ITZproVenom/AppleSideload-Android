@@ -445,7 +445,7 @@ class AppleAuthTest {
     @Test
     fun aCodeFromATrustedDeviceCanBeRetyped() = FakeApple().use { apple ->
         apple.secondFactor = "trustedDeviceSecondaryAuth"
-        val auth = auth(apple)
+        val auth = auth(apple, ResyncAnisette())
         val pending = (auth.signIn(apple.email, apple.password) as AuthResult.TrustedDeviceCodeRequired).pending
 
         val push = apple.requests.single { it.path == "/tds" }
@@ -456,6 +456,8 @@ class AppleAuthTest {
         assertEquals("OTP-VALUE", push.headers["x-apple-i-md"])
         assertEquals(GrandSlam.CLIENT_INFO, push.headers["x-mme-client-info"])
 
+        val rejected = apple.requests.last { it.path == "/validate" }
+        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, rejected.headers["x-mme-client-info"])
         try {
             auth.submitTrustedDeviceCode(pending, "000000")
             fail("a wrong code was accepted")

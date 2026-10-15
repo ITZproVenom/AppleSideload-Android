@@ -312,7 +312,13 @@ class AppleAuth(
         val data = anisette.fetch()
         val url = gsUrl("validateCode")
         val reply = try {
-            Http.parsePlist(url, grandSlam.send(url, headers = twoFactorHeaders(pending, data) + ("security-code" to code)))
+            Http.parsePlist(
+                url,
+                grandSlam.send(
+                    url,
+                    headers = twoFactorHeaders(pending, data) + data.clientHeaders() + ("security-code" to code)
+                )
+            )
         } catch (error: IOException) {
             throw AppleAuthException(0, "the code could not be checked: ${error.message}")
         }
