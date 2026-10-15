@@ -50,7 +50,7 @@ data class AnisetteData(
         "X-Apple-I-MD-M" to machineId
     ).apply { putAll(extraHeaders) }
 
-    /** Match the Apple client profile to the Android anisette tokens. */
+    /** Match Apple client identification to the Android anisette tokens. */
     fun clientHeaders(): Map<String, String> = buildMap {
         clientInfo?.let { put("X-Mme-Client-Info", it) }
         userAgent?.let { put("User-Agent", it) }
