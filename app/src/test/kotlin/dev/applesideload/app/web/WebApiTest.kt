@@ -304,6 +304,16 @@ class WebApiTest {
     }
 
     @Test
+    fun directHostRejectsOutOfRangePorts() {
+        assertTrue(WebApi.isDirectHost("192.168.1.20:8686"))
+        assertTrue(WebApi.isDirectHost("[fe80::1]:8686"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:0"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:65536"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:"))
+        assertFalse(WebApi.isDirectHost("[fe80::1]:99999"))
+    }
+
+    @Test
     fun otherWebsitesAndOtherNamesAreRefused() {
         // DNS rebinding: a website's own name pointed at the phone.
         assertTrue(raw("GET /api/state HTTP/1.1\r\nHost: attacker.example:$port\r\n\r\n").startsWith("HTTP/1.1 403"))

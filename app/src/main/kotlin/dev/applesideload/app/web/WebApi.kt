@@ -307,7 +307,7 @@ class WebApi(
                 port = if (host.contains(':')) host.substringAfter(':') else null
                 if (name.lowercase() != "localhost" && !IPV4.matches(name)) return false
             }
-            return port == null || PORT.matches(port)
+            return port == null || (PORT.matches(port) && port.toIntOrNull() in 1..65535)
         }
     }
 }
