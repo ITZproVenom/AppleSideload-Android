@@ -330,6 +330,13 @@ class DeveloperSession(
             ?: reply["resultString"]?.asString
             ?: "no further detail was given"
         return when (result) {
+            2160 -> DeveloperServiceException(
+                result,
+                detail,
+                limitation = "Apple requires this account's email address to be verified before using developer services",
+                alternative = "verify the email at account.apple.com, then sign in again"
+            )
+
             3200 -> DeveloperServiceException(
                 result,
                 detail,
