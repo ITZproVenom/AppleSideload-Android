@@ -215,6 +215,14 @@ class WebApi(
             }
             onMain.call { controls.setAnisetteAddress(address) }
         }
+        if (fields.has("androidClientProfile")) {
+            val enabled = try {
+                fields.getBoolean("androidClientProfile")
+            } catch (_: JSONException) {
+                throw HttpError(400, "androidClientProfile must be true or false.")
+            }
+            onMain.call { controls.setAndroidClientProfile(enabled) }
+        }
         if (fields.has("wifiDiscovery")) {
             val enabled = try {
                 fields.getBoolean("wifiDiscovery")
@@ -307,7 +315,7 @@ class WebApi(
                 port = if (host.contains(':')) host.substringAfter(':') else null
                 if (name.lowercase() != "localhost" && !IPV4.matches(name)) return false
             }
-            return port == null || PORT.matches(port)
+            return port == null || (PORT.matches(port) && port.toIntOrNull() in 1..65535)
         }
     }
 }

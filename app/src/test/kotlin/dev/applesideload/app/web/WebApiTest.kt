@@ -44,10 +44,11 @@ private class RecordingControls : Controls {
     var uploaded: File? = null
     var anisette = ""
     var wifi = true
+    var androidClientProfile = false
 
     override val state: StateFlow<UiState> get() = mutableState
     override val logs: StateFlow<List<LogLine>> get() = mutableLogs
-    override fun settingsSnapshot() = SettingsSnapshot(anisette, anisette.ifBlank { "https://ani.sidestore.io" }, wifi, "me@example.com", "192.168.1.9")
+    override fun settingsSnapshot() = SettingsSnapshot(anisette, anisette.ifBlank { "https://ani.sidestore.io" }, wifi, "me@example.com", "192.168.1.9", androidClientProfile)
 
     private fun record(call: String): Action {
         calls += call
@@ -75,6 +76,7 @@ private class RecordingControls : Controls {
     override fun installSource(source: InstallSource) = record("source:${source.name}")
     override fun install() = record("install")
     override fun setAnisetteAddress(address: String) { anisette = address; calls += "anisette:$address" }
+    override fun setAndroidClientProfile(enabled: Boolean) { androidClientProfile = enabled; calls += "android-profile:$enabled" }
     override fun setWifiDiscovery(enabled: Boolean) { wifi = enabled; calls += "wifi:$enabled" }
     override fun exportLogs() = "exported log"
 }
@@ -219,7 +221,8 @@ class WebApiTest {
             Triple("/api/install-source", """{"source":"SIDESTORE"}""", "source:SIDESTORE"),
             Triple("/api/install", "{}", "install"),
             Triple("/api/dismiss", "{}", "dismiss"),
-            Triple("/api/settings", """{"anisetteAddress":"https://ani.example.com","wifiDiscovery":false}""", "anisette:https://ani.example.com")
+            Triple("/api/settings", """{"anisetteAddress":"https://ani.example.com","wifiDiscovery":false}""", "anisette:https://ani.example.com"),
+            Triple("/api/settings", """{"androidClientProfile":true}""", "android-profile:true")
         )
         for ((path, body, expected) in routes) {
             controls.calls.clear()
@@ -301,6 +304,16 @@ class WebApiTest {
         socket.getOutputStream().write(text.toByteArray())
         socket.shutdownOutput()
         String(socket.getInputStream().readBytes())
+    }
+
+    @Test
+    fun directHostRejectsOutOfRangePorts() {
+        assertTrue(WebApi.isDirectHost("192.168.1.20:8686"))
+        assertTrue(WebApi.isDirectHost("[fe80::1]:8686"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:0"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:65536"))
+        assertFalse(WebApi.isDirectHost("192.168.1.20:"))
+        assertFalse(WebApi.isDirectHost("[fe80::1]:99999"))
     }
 
     @Test
