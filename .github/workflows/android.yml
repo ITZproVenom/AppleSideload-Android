@@ -49,7 +49,7 @@ jobs:
           name: AppleSideload-apk
           path: AppleSideload.apk
       - name: Publish release
-        if: github.event_name != 'pull_request'
+        if: false
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
