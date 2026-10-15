@@ -133,7 +133,8 @@ data class SettingsSnapshot(
     val effectiveAnisetteAddress: String,
     val wifiDiscovery: Boolean,
     val lastAppleId: String,
-    val lastWirelessAddress: String
+    val lastWirelessAddress: String,
+    val androidClientProfile: Boolean = false
 )
 
 /**
@@ -169,6 +170,7 @@ interface Controls {
     fun installSource(source: InstallSource): Action
     fun install(): Action
     fun setAnisetteAddress(address: String)
+    fun setAndroidClientProfile(enabled: Boolean) {}
     fun setWifiDiscovery(enabled: Boolean)
     fun exportLogs(): String
 }
@@ -254,7 +256,8 @@ class AppController(private val app: SideloadApplication) : Controls {
         effectiveAnisetteAddress = app.settings.effectiveAnisetteAddress,
         wifiDiscovery = app.settings.wifiDiscovery,
         lastAppleId = app.settings.lastAppleId,
-        lastWirelessAddress = app.settings.lastWirelessAddress
+        lastWirelessAddress = app.settings.lastWirelessAddress,
+        androidClientProfile = app.settings.androidClientProfile
     )
 
     override fun dismissMessages() = set { it.copy(error = null, notice = null) }
@@ -1080,6 +1083,11 @@ class AppController(private val app: SideloadApplication) : Controls {
 
     override fun setAnisetteAddress(address: String) {
         app.settings.anisetteAddress = address
+        set { it.copy(settingsRevision = it.settingsRevision + 1) }
+    }
+
+    override fun setAndroidClientProfile(enabled: Boolean) {
+        app.settings.androidClientProfile = enabled
         set { it.copy(settingsRevision = it.settingsRevision + 1) }
     }
 
