@@ -16,16 +16,16 @@ notes of the next release.
 - The password proof (SRP) had three calculation errors, so Apple would have
   refused even the right password. It now matches the reference
   implementation, checked against values computed with it.
-- The app sets up its own device identity with the anisette server
-  (anisette v3) and keeps it on the phone. Apple sees the same device each
-  time, so two-factor is needed once and your account lists one device. Like
-  SideStore and SideInstaller, that device shows as a Mac: Apple has no
-  sign-in for Android. Anisette servers that only offer the older API still
-  work.
-- Two-factor: the trusted phone numbers load, so codes by text message work
-  (the list was always empty). A wrong code can be typed again, and if Apple
-  asks for another code after the first one, the app asks for it instead of
-  stopping.
+- The app sets up its own device identity with the configured anisette server
+  (anisette v3) and keeps it on the phone. Apple sees the same identity on
+  later sign-ins. Since 12 October 2026, Apple has required the client profile
+  to match the Android-based anisette data; the app now identifies as the
+  Android client for sign-in and developer requests. Legacy anisette sources
+  can keep using the previous profile via Settings.
+- Apple refuses second-factor endpoints when they identify as Android, so
+  trusted-device and phone-code requests use the Mac client profile, matching
+  SideInstaller 1.5.1. SMS verification can use a trusted phone number; no
+  extra computer or anisette-generating device is required.
 - The token for Apple's developer service is requested and decrypted the way
   Apple sends it now.
 - When Apple is busy (*429 Too Many Requests*), the app waits and tries twice
