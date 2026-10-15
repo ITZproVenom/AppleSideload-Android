@@ -28,6 +28,10 @@ class Settings(context: Context) {
     val effectiveAnisetteAddress: String
         get() = anisetteAddress.ifBlank { AnisetteServers.default.address }
 
+    var androidClientProfile: Boolean
+        get() = preferences.getBoolean(KEY_ANDROID_PROFILE, true)
+        set(value) = preferences.edit().putBoolean(KEY_ANDROID_PROFILE, value).apply()
+
     var wifiDiscovery: Boolean
         get() = preferences.getBoolean(KEY_WIFI, true)
         set(value) = preferences.edit().putBoolean(KEY_WIFI, value).apply()
@@ -62,6 +66,7 @@ class Settings(context: Context) {
 
     private companion object {
         const val KEY_ANISETTE = "anisette"
+        const val KEY_ANDROID_PROFILE = "android_client_profile"
         const val KEY_WIFI = "wifi_discovery"
         const val KEY_APPLE_ID = "apple_id"
         const val KEY_DEVICE_ID = "device_id"
@@ -107,8 +112,7 @@ class SideloadApplication : Application() {
     fun anisetteProvider(): AnisetteProvider = RemoteAnisetteProvider(
         baseUrl = settings.effectiveAnisetteAddress,
         deviceId = settings.deviceId,
-        // This phone's own v3 identity, kept so Apple keeps seeing one
-        // machine and a two factor code is not asked for every time.
-        store = FileAnisetteStore(File(filesDir, "anisette-identity.properties"))
+        store = FileAnisetteStore(File(filesDir, "anisette-identity.properties")),
+        useAndroidClientInfo = settings.androidClientProfile
     )
 }

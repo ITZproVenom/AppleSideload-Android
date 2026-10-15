@@ -242,6 +242,7 @@ class MainActivity : ComponentActivity() {
                         logLines = logs.size,
                         version = version,
                         onAnisetteAddress = viewModel::setAnisetteAddress,
+                        onAndroidClientProfile = viewModel::setAndroidClientProfile,
                         onWifiDiscovery = viewModel::setWifiDiscovery,
                         onWebEnabled = { enabled ->
                             if (enabled) startWebControl() else WebControlService.stop(this@MainActivity)
