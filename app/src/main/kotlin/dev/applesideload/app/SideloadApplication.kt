@@ -108,7 +108,7 @@ class SideloadApplication : Application() {
         Log.i(LogTag.APP, "AppleSideload started")
     }
 
-    /** Built fresh so a changed address in Settings takes effect at once. */
+    /** Built fresh so changed anisette source/profile settings take effect at once. */
     fun anisetteProvider(): AnisetteProvider = RemoteAnisetteProvider(
         baseUrl = settings.effectiveAnisetteAddress,
         deviceId = settings.deviceId,
