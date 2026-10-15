@@ -94,7 +94,10 @@ object XmlPlist {
         val root = document.documentElement
             ?: throw PlistException("the document has no root element")
         val first = firstElement(root) ?: throw PlistException("the plist is empty")
-        return node(first)
+        // GrandSlam's encrypted session payload can be a bare sequence of
+        // <key>/<value> pairs under <plist>, rather than a wrapped <dict>.
+        // Treat that root-level sequence as the dictionary Apple intended.
+        return if (first.tagName == "key") dictionary(children(root)) else node(first)
     }
 
     fun write(value: Plist): ByteArray = buildString {
@@ -156,23 +159,24 @@ object XmlPlist {
         "data" -> Plist.Data(Base64.decode(element.textContent ?: ""))
         "date" -> Plist.Stamp(IsoDate.parseToAppleSeconds(element.textContent?.trim() ?: ""))
         "array" -> Plist.Arr(children(element).map { node(it) })
-        "dict" -> {
-            val out = LinkedHashMap<String, Plist>()
-            val items = children(element)
-            var index = 0
-            while (index < items.size) {
-                val keyNode = items[index]
-                if (keyNode.tagName != "key") {
-                    throw PlistException("a dict entry is missing its key")
-                }
-                val valueNode = items.getOrNull(index + 1)
-                    ?: throw PlistException("the key ${keyNode.textContent} has no value")
-                out[keyNode.textContent ?: ""] = node(valueNode)
-                index += 2
-            }
-            Plist.Dict(out)
-        }
+        "dict" -> dictionary(children(element))
         else -> throw PlistException("unknown plist element <${element.tagName}>")
+    }
+
+    private fun dictionary(items: List<Element>): Plist.Dict {
+        val out = LinkedHashMap<String, Plist>()
+        var index = 0
+        while (index < items.size) {
+            val keyNode = items[index]
+            if (keyNode.tagName != "key") {
+                throw PlistException("a dict entry is missing its key")
+            }
+            val valueNode = items.getOrNull(index + 1)
+                ?: throw PlistException("the key ${keyNode.textContent} has no value")
+            out[keyNode.textContent ?: ""] = node(valueNode)
+            index += 2
+        }
+        return Plist.Dict(out)
     }
 
     private fun children(element: Element): List<Element> {

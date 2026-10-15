@@ -66,6 +66,23 @@ class PlistTest {
     }
 
     @Test
+    fun `xml plist accepts bare root key value session dictionaries`() {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+            <plist version="1.0">
+              <key>adsid</key><string>account-id</string>
+              <key>GsIdmsToken</key><string>session-token</string>
+              <key>sk</key><data>AQIDBA==</data>
+              <key>nested</key><dict><key>name</key><string>value</string></dict>
+            </plist>""".trimIndent().toByteArray()
+
+        val parsed = PlistReader.parse(xml)
+        assertEquals("account-id", parsed["adsid"]?.asString)
+        assertEquals("session-token", parsed["GsIdmsToken"]?.asString)
+        assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(parsed["sk"]?.asData))
+        assertEquals("value", parsed["nested"]?.get("name")?.asString)
+    }
+
+    @Test
     fun `a truncated binary plist is rejected rather than guessed at`() {
         val encoded = BinaryPlist.write(sample)
         assertFailsWith<PlistException> {

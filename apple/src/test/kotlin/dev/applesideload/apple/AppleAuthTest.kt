@@ -47,6 +47,7 @@ class AppleAuthTest {
         @Volatile var trusted = false
         @Volatile var resyncFirstInit = false
         @Volatile var resyncDataAsPlistData = false
+        @Volatile var bareSessionPayload = false
         val initStatuses = ConcurrentLinkedDeque<Int>()
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iterations = 1000
@@ -177,7 +178,7 @@ class AppleAuthTest {
                         status(exchange, -20101, "Your account information was entered incorrectly.")
                         return
                     }
-                    val payload = XmlPlist.write(
+                    val wrappedPayload = XmlPlist.write(
                         Plist.dict(
                             "adsid" to Plist.Str(adsid),
                             "GsIdmsToken" to Plist.Str(idmsToken),
@@ -187,6 +188,14 @@ class AppleAuthTest {
                             "ln" to Plist.Str("Tester")
                         )
                     )
+                    val payload = if (bareSessionPayload) """<?xml version="1.0" encoding="UTF-8"?>
+                        <plist version="1.0">
+                          <key>adsid</key><string>$adsid</string>
+                          <key>GsIdmsToken</key><string>$idmsToken</string>
+                          <key>sk</key><data>${java.util.Base64.getEncoder().encodeToString(sk)}</data>
+                          <key>c</key><data>${java.util.Base64.getEncoder().encodeToString(cookie)}</data>
+                          <key>fn</key><string>Alex</string><key>ln</key><string>Tester</string>
+                        </plist>""".trimIndent().toByteArray() else wrappedPayload
                     val spd = Cipher.getInstance("AES/CBC/PKCS5Padding").run {
                         init(
                             Cipher.ENCRYPT_MODE,
@@ -344,6 +353,18 @@ class AppleAuthTest {
         val anisette = ResyncAnisette()
         assertTrue(auth(apple, anisette).signIn(apple.email, apple.password) is AuthResult.Success)
         assertEquals("c2ltLWRhdGE=", anisette.seenSim)
+    }
+
+    @Test
+    fun decryptsAppleBareSessionPayloadAndCompletesDeveloperToken() = FakeApple().use { apple ->
+        apple.bareSessionPayload = true
+        val auth = auth(apple)
+        val session = (auth.signIn(apple.email, apple.password) as AuthResult.Success).session
+        assertEquals(apple.adsid, session.adsid)
+        assertEquals(apple.idmsToken, session.idmsToken)
+        assertArrayEquals(apple.sk, session.sessionKey)
+        assertArrayEquals(apple.cookie, session.appTokenCookie)
+        assertEquals("DEV-TOKEN", auth.fetchAppToken(session).developerToken)
     }
 
     @Test
