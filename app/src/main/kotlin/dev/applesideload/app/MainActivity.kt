@@ -212,7 +212,8 @@ class MainActivity : ComponentActivity() {
                     onInstallSource = viewModel::installSource,
                     onPickFile = { pickFile.launch(arrayOf("*/*")) },
                     onInstall = viewModel::install,
-                    onNavigate = { destination = it }
+                    onNavigate = { destination = it },
+                    onSendToLiveContainer = viewModel::sendToLiveContainer
                 )
 
                 Destination.APPS -> AppsScreen(
@@ -230,7 +231,10 @@ class MainActivity : ComponentActivity() {
                     onRequestPhoneCode = viewModel::requestPhoneCode,
                     onSelectTeam = viewModel::selectTeamById,
                     onSignOut = viewModel::signOut,
-                    onRevoke = viewModel::revokeCertificate
+                    onRevoke = viewModel::revokeCertificate,
+                    appIds = state.appIds,
+                    onLoadAppIds = viewModel::loadAppIds,
+                    onDeleteAppId = viewModel::deleteAppId
                 )
 
                 Destination.SETTINGS -> {

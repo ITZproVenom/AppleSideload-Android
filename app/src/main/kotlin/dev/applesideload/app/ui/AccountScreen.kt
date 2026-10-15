@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import dev.applesideload.app.TwoFactorPrompt
 import dev.applesideload.app.UiState
 import dev.applesideload.apple.AppleSession
+import dev.applesideload.apple.DeveloperAppId
 
 /** The Account tab: the Apple ID that signs, its team and its certificate. */
 @Composable
@@ -62,7 +63,10 @@ fun AccountScreen(
     onRequestPhoneCode: (Int) -> Unit,
     onSelectTeam: (String) -> Unit,
     onSignOut: () -> Unit,
-    onRevoke: () -> Unit
+    onRevoke: () -> Unit,
+    appIds: List<DeveloperAppId>? = null,
+    onLoadAppIds: () -> Unit = {},
+    onDeleteAppId: (String) -> Unit = {}
 ) = ScreenColumn {
     val idle = state.busy == null
     val account = state.account
@@ -83,6 +87,7 @@ fun AccountScreen(
     ProfileCard(account, onSignOut)
     TeamCard(state, idle, onSelectTeam)
     CertificateCard(idle, onRevoke)
+    AppIdsCard(appIds, idle, onLoadAppIds, onDeleteAppId)
 }
 
 @Composable
@@ -271,6 +276,72 @@ private fun CertificateCard(idle: Boolean, onRevoke: () -> Unit) {
             confirmLabel = "Revoke",
             onConfirm = onRevoke,
             onDismiss = { confirming = false }
+        )
+    }
+}
+
+@Composable
+private fun AppIdsCard(
+    appIds: List<DeveloperAppId>?,
+    idle: Boolean,
+    onLoad: () -> Unit,
+    onDelete: (String) -> Unit
+) {
+    var pending by remember { mutableStateOf<DeveloperAppId?>(null) }
+    SectionCard("App IDs", icon = Icons.Filled.Badge) {
+        Text(
+            "A free account can register 10 App IDs in 7 days, and an app with extensions uses " +
+                "one for each. This lists them and can delete the ones you no longer need.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Hint(
+            "Deleting does not give the slot back: Apple keeps counting a deleted App ID until its " +
+                "week is up. It also stops the app that uses it from opening until it is installed again."
+        )
+        if (appIds == null) {
+            OutlinedButton(onClick = onLoad, enabled = idle) { Text("Show App IDs") }
+        } else {
+            Text("${appIds.size} registered", style = MaterialTheme.typography.labelLarge)
+            appIds.forEach { appId ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            appId.identifier,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        appId.expiration?.let { millis ->
+                            Text(
+                                "Expires " + java.text.DateFormat.getDateInstance().format(java.util.Date(millis)),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    TextButton(
+                        onClick = { pending = appId },
+                        enabled = idle,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) { Text("Delete") }
+                }
+            }
+            OutlinedButton(onClick = onLoad, enabled = idle) { Text("Refresh") }
+        }
+    }
+    pending?.let { target ->
+        ConfirmDialog(
+            title = "Delete this App ID?",
+            text = "${target.identifier} is removed from your account. The app that uses it stops " +
+                "opening until it is installed again.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                pending = null
+                onDelete(target.appIdId)
+            },
+            onDismiss = { pending = null }
         )
     }
 }

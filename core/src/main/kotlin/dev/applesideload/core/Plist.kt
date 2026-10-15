@@ -94,7 +94,27 @@ object XmlPlist {
         val root = document.documentElement
             ?: throw PlistException("the document has no root element")
         val first = firstElement(root) ?: throw PlistException("the plist is empty")
+        // Apple's decrypted GrandSlam session payload ("spd") is a run of bare
+        // <key>/<value> pairs directly under <plist>, with no <dict> around
+        // them. Read that shape as the dictionary it stands for.
+        if (first.tagName == "key") return dictFrom(children(root))
         return node(first)
+    }
+
+    private fun dictFrom(items: List<Element>): Plist.Dict {
+        val out = LinkedHashMap<String, Plist>()
+        var index = 0
+        while (index < items.size) {
+            val keyNode = items[index]
+            if (keyNode.tagName != "key") {
+                throw PlistException("a dict entry is missing its key")
+            }
+            val valueNode = items.getOrNull(index + 1)
+                ?: throw PlistException("the key ${keyNode.textContent} has no value")
+            out[keyNode.textContent ?: ""] = node(valueNode)
+            index += 2
+        }
+        return Plist.Dict(out)
     }
 
     fun write(value: Plist): ByteArray = buildString {
@@ -156,22 +176,7 @@ object XmlPlist {
         "data" -> Plist.Data(Base64.decode(element.textContent ?: ""))
         "date" -> Plist.Stamp(IsoDate.parseToAppleSeconds(element.textContent?.trim() ?: ""))
         "array" -> Plist.Arr(children(element).map { node(it) })
-        "dict" -> {
-            val out = LinkedHashMap<String, Plist>()
-            val items = children(element)
-            var index = 0
-            while (index < items.size) {
-                val keyNode = items[index]
-                if (keyNode.tagName != "key") {
-                    throw PlistException("a dict entry is missing its key")
-                }
-                val valueNode = items.getOrNull(index + 1)
-                    ?: throw PlistException("the key ${keyNode.textContent} has no value")
-                out[keyNode.textContent ?: ""] = node(valueNode)
-                index += 2
-            }
-            Plist.Dict(out)
-        }
+        "dict" -> dictFrom(children(element))
         else -> throw PlistException("unknown plist element <${element.tagName}>")
     }
 

@@ -96,4 +96,14 @@ class PlistTest {
         assertTrue("bestin@example.com" !in clean)
         assertTrue("001A2B3C4D5E6F70" !in clean)
     }
+
+    @Test
+    fun `a bare key value payload under plist reads as a dictionary`() {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><key>adsid</key><string>001</string><key>sk</key><data>AAEC</data><key>t</key><dict><key>x</key><integer>7</integer></dict></plist>"""
+        val parsed = PlistReader.parse(xml.toByteArray())
+        assertEquals("001", parsed["adsid"]?.asString)
+        assertEquals(3, parsed["sk"]?.asData?.size)
+        assertEquals(7L, parsed["t"]?.get("x")?.asLong)
+    }
 }

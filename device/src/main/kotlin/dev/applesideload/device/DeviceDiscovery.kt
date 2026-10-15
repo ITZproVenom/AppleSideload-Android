@@ -12,12 +12,12 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import dev.applesideload.core.Log
 import dev.applesideload.core.LogTag
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.suspendCancellableCoroutine
 import java.net.InetAddress
-import kotlin.coroutines.resume
 
 /** How a device was found, and how it can be reached. */
 sealed class DiscoveredDevice {
@@ -84,32 +84,58 @@ class DeviceDiscovery(private val context: Context) {
      */
     suspend fun requestPermission(device: UsbDevice): Boolean {
         if (usbManager.hasPermission(device)) return true
-        return suspendCancellableCoroutine { continuation ->
-            val action = "${context.packageName}.USB_PERMISSION"
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action != action) return
-                    runCatching { context.unregisterReceiver(this) }
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    Log.i(LogTag.USB, if (granted) "USB access was granted" else "USB access was refused")
-                    if (continuation.isActive) continuation.resume(granted)
-                }
+        val action = "${context.packageName}.USB_PERMISSION"
+        val answered = CompletableDeferred<Boolean>()
+        // Android's answer comes as a broadcast, but a broadcast can be lost or
+        // arrive without its extra on some versions and makes, so it is only a
+        // nudge: the verdict is whatever UsbManager says about the device.
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != action) return
+                val extra = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                Log.i(LogTag.USB, "Android answered the USB access request (granted flag: $extra)")
+                answered.complete(extra)
             }
-            val filter = IntentFilter(action)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                context.registerReceiver(receiver, filter)
-            }
-            continuation.invokeOnCancellation { runCatching { context.unregisterReceiver(receiver) } }
+        }
+        val filter = IntentFilter(action)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // The system sends this on the app's behalf, so a receiver that
+            // refuses outside senders can miss it.
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(receiver, filter)
+        }
+        try {
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
             val intent = PendingIntent.getBroadcast(
                 context,
                 0,
                 Intent(action).setPackage(context.packageName),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                flags
             )
             usbManager.requestPermission(device, intent)
+            Log.i(LogTag.USB, "asked Android for access to ${device.deviceName}")
+            val deadline = System.nanoTime() + WAIT_FOR_PERMISSION_NANOS
+            while (System.nanoTime() < deadline) {
+                if (usbManager.hasPermission(device)) {
+                    Log.i(LogTag.USB, "USB access was granted")
+                    return true
+                }
+                if (answered.isCompleted) {
+                    // Give Android a moment to record the grant before judging.
+                    delay(400)
+                    val granted = usbManager.hasPermission(device)
+                    Log.i(LogTag.USB, if (granted) "USB access was granted" else "USB access was refused")
+                    return granted
+                }
+                delay(200)
+            }
+            Log.w(LogTag.USB, "no answer to the USB access request after two minutes")
+            return usbManager.hasPermission(device)
+        } finally {
+            runCatching { context.unregisterReceiver(receiver) }
         }
     }
 
@@ -191,5 +217,7 @@ class DeviceDiscovery(private val context: Context) {
     companion object {
         /** What a device with Wi-Fi sync enabled advertises. */
         const val SERVICE_TYPE = "_apple-mobdev2._tcp"
+
+        private const val WAIT_FOR_PERMISSION_NANOS = 120_000_000_000L
     }
 }

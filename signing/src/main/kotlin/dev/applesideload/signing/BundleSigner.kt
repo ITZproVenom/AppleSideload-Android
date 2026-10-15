@@ -24,7 +24,13 @@ class BundleSigner(
      * LiveContainer needs. The profile's own team-wide keychain wildcard is
      * what lets the device accept them.
      */
-    private val extraEntitlements: Map<String, Plist> = emptyMap()
+    private val extraEntitlements: Map<String, Plist> = emptyMap(),
+    /**
+     * Profiles for extensions and watch apps, by their bundle identifier. iOS
+     * checks that a bundle's identifier is covered by the profile inside it,
+     * so an extension cannot borrow the main app's explicit-identifier profile.
+     */
+    private val nestedProfiles: Map<String, ProvisioningProfile> = emptyMap()
 ) {
 
     /** Reports each bundle as it is signed, for the install screen. */
@@ -54,9 +60,10 @@ class BundleSigner(
                         // isideload, each gets the main app's entitlements and
                         // a copy of its profile, which is what authorises them.
                         entry.isDirectory && (entry.name.endsWith(".appex") || entry.name.endsWith(".app")) -> {
+                            val own = nestedProfile(entry)
                             signNested(entry)
-                            writeProfile(entry)
-                            signBundle(entry, kind = Kind.APP)
+                            writeProfile(entry, own)
+                            signBundle(entry, kind = Kind.APP, profile = own)
                         }
 
                         // Frameworks get neither, as Xcode signs them.
@@ -71,14 +78,23 @@ class BundleSigner(
             }
     }
 
-    private fun writeProfile(bundle: File) {
-        File(bundle, "embedded.mobileprovision").writeBytes(profile.raw)
+    private fun writeProfile(bundle: File, forBundle: ProvisioningProfile = profile) {
+        File(bundle, "embedded.mobileprovision").writeBytes(forBundle.raw)
+    }
+
+    /** The profile issued for this nested bundle's identifier, or the main one if none was given. */
+    private fun nestedProfile(bundle: File): ProvisioningProfile {
+        val infoFile = File(bundle, "Info.plist")
+        val identifier = runCatching {
+            PlistReader.parse(infoFile.readBytes())["CFBundleIdentifier"]?.asString
+        }.getOrNull()
+        return identifier?.let { nestedProfiles[it] } ?: profile
     }
 
     /** Signs one bundle: its resources, then its executable. */
     private enum class Kind { MAIN, APP, CODE }
 
-    private fun signBundle(bundle: File, kind: Kind) {
+    private fun signBundle(bundle: File, kind: Kind, profile: ProvisioningProfile = this.profile) {
         val infoFile = File(bundle, "Info.plist")
         if (!infoFile.exists()) {
             // A framework directory without an Info.plist is not code.
@@ -108,7 +124,7 @@ class BundleSigner(
         File(bundle, "_CodeSignature").mkdirs()
         File(bundle, "_CodeSignature/CodeResources").writeBytes(resources)
 
-        val entitlements = if (kind == Kind.CODE) null else XmlPlist.write(appEntitlements())
+        val entitlements = if (kind == Kind.CODE) null else XmlPlist.write(appEntitlements(profile))
 
         signExecutable(
             executable = executable,
@@ -134,8 +150,8 @@ class BundleSigner(
     }
 
     /** The profile's entitlements plus [extraEntitlements]. */
-    private fun appEntitlements(): Plist {
-        val base = profile.entitlements.asDict.orEmpty()
+    private fun appEntitlements(from: ProvisioningProfile): Plist {
+        val base = from.entitlements.asDict.orEmpty()
         return Plist.Dict(LinkedHashMap(base).apply { putAll(extraEntitlements) })
     }
 

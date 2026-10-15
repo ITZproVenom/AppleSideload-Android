@@ -476,9 +476,16 @@ class AppleAuth(
                 limitation = when (code) {
                     -20101 -> "the Apple ID or password is wrong"
                     -22406 -> "Apple rejected the attestation headers as invalid"
+                    -80045 -> "Apple gave no reason for refusing the very first step; it may be " +
+                        "throttling sign-ins from this account or this phone's anisette identity"
                     else -> null
                 },
-                alternative = if (code == -22406) "pick another anisette source in Settings" else null
+                alternative = when (code) {
+                    -22406 -> "pick another anisette source in Settings"
+                    -80045 -> "stop retrying for a while, then try again; if it keeps failing, " +
+                        "pick another anisette source in Settings"
+                    else -> null
+                }
             )
         }
         return response
