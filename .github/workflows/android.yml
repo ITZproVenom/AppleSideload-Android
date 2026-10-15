@@ -19,7 +19,19 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and test
-        run: ./gradlew assembleRelease test --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease test --stacktrace 2>&1 | tee gradle-output.log
+      - name: Keep build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            gradle-output.log
+            **/build/reports/tests/**
+            **/build/test-results/**
+          if-no-files-found: ignore
       - name: Keep the screenshots
         if: always()
         uses: actions/upload-artifact@v4
