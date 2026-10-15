@@ -387,7 +387,10 @@ class SideloadEngine(
 
     private fun installStaged(device: DeviceSession, fileName: String, onStep: (SideloadStep) -> Unit) {
         device.installationProxy().use { proxy ->
-            proxy.install("$STAGING/$fileName") { progress: InstallProgress ->
+            // installation_proxy resolves the package relative to the Media
+            // folder ("PublicStaging/x.ipa", as ideviceinstaller and
+            // pymobiledevice3 send it), not as an absolute AFC path.
+            proxy.install("${STAGING.trimStart('/')}/$fileName") { progress: InstallProgress ->
                 onStep(SideloadStep.Installing(progress.percent, progress.status))
             }
         }

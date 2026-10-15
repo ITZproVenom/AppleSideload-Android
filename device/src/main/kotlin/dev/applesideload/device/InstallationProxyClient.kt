@@ -102,8 +102,7 @@ class InstallationProxyClient(private val service: PlistService) : Closeable {
                 "Command" to Plist.Str(command),
                 "PackagePath" to Plist.Str(stagedPath),
                 "ClientOptions" to Plist.dict(
-                    "PackageType" to Plist.Str("Developer"),
-                    "CFBundleIdentifier" to Plist.Str("")
+                    "PackageType" to Plist.Str("Developer")
                 )
             )
         )
