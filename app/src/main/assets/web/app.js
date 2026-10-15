@@ -440,18 +440,22 @@
   }
 
   // Settings
-  let anisetteInput, wifiCheck;
+  let anisetteInput, androidClientProfile, wifiCheck;
   function buildSettings() {
     anisetteInput = h("input", { type: "text", placeholder: "https://ani.sidestore.io", "aria-label": "Attestation address" });
     dyn.chips = h("div", { class: "chips" });
     wifiCheck = h("input", { type: "checkbox" });
     wifiCheck.addEventListener("change", () => act("/api/settings", { wifiDiscovery: wifiCheck.checked }));
+    androidClientProfile = h("input", { type: "checkbox" });
+    androidClientProfile.addEventListener("change", () => act("/api/settings", { androidClientProfile: androidClientProfile.checked }));
     const save = () => act("/api/settings", { anisetteAddress: anisetteInput.value.trim() }).then((ok) => { if (ok) toast("Attestation source saved."); });
     views.Settings.append(
       h("div", { class: "card" }, h("h2", { text: "Attestation source" }),
         h("p", { class: "muted", text: "Apple's sign-in needs attestation headers that only Apple's own code can make. The phone asks this server for them; it never sees your Apple ID or password. Leave empty for the default." }),
         h("div", { class: "row" }, h("div", { class: "grow" }, anisetteInput), h("button", { class: "primary", text: "Save", onclick: save })),
-        dyn.chips),
+        dyn.chips,
+        h("label", { class: "check" }, androidClientProfile, h("span", { text: "Identify as Android for Apple sign-in" })),
+        h("p", { class: "muted", text: "Use the Android profile that matches anisette v3 data. Uses the configured anisette server only—no extra device." })),
       h("div", { class: "card" }, h("h2", { text: "Discovery" }),
         h("label", { class: "check" }, wifiCheck, h("span", { text: "Look for iPhones over Wi-Fi" })),
         h("p", { class: "muted", text: "Only iPhones already paired with this app and with Wi-Fi sync on advertise themselves." })),
@@ -463,6 +467,7 @@
     const st = state.settings;
     if (!anisettePrefilled) { anisetteInput.value = st.anisetteAddress; anisettePrefilled = true; }
     if (document.activeElement !== wifiCheck) wifiCheck.checked = st.wifiDiscovery;
+    if (document.activeElement !== androidClientProfile) androidClientProfile.checked = st.androidClientProfile;
     fill(dyn.chips, ...state.anisetteServers.map((srv) =>
       h("button", { class: srv.address === st.effectiveAnisetteAddress ? "on" : "", text: srv.name, title: srv.address,
         onclick: () => { anisetteInput.value = srv.address; act("/api/settings", { anisetteAddress: srv.address }); } })));
