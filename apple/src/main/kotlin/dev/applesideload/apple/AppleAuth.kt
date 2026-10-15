@@ -124,7 +124,8 @@ class AppleAuth(
                 "ps" to Plist.Arr(listOf(Plist.Str("s2k"), Plist.Str("s2k_fo"))),
                 "u" to Plist.Str(appleId)
             ),
-            step = "the first sign-in step"
+            step = "the first sign-in step",
+            headers = data.clientHeaders()
         )
         val salt = first["s"]?.asData ?: throw incomplete("an SRP salt")
         val serverB = first["B"]?.asData ?: throw incomplete("an SRP challenge")
@@ -147,7 +148,7 @@ class AppleAuth(
                 "u" to Plist.Str(appleId)
             ),
             step = "the second sign-in step",
-            headers = mapOf("Connection" to "close")
+            headers = data.clientHeaders() + mapOf("Connection" to "close")
         )
         val m2 = second["M2"]?.asData ?: throw incomplete("its own proof (M2)")
         if (!srp.verifyServerProof(m2)) {
@@ -236,7 +237,8 @@ class AppleAuth(
                 "u" to Plist.Str(session.adsid),
                 "t" to Plist.Str(session.idmsToken)
             ),
-            step = "the developer token request"
+            step = "the developer token request",
+            headers = data.clientHeaders()
         )
         val encrypted = response["et"]?.asData ?: throw incomplete("the encrypted developer token")
         val reply = try {
@@ -476,9 +478,14 @@ class AppleAuth(
                 limitation = when (code) {
                     -20101 -> "the Apple ID or password is wrong"
                     -22406 -> "Apple rejected the attestation headers as invalid"
+                    -80045 -> "Apple did not accept the anisette/client identity used by this request"
                     else -> null
                 },
-                alternative = if (code == -22406) "pick another anisette source in Settings" else null
+                alternative = when (code) {
+                    -22406 -> "pick another anisette source in Settings"
+                    -80045 -> "check the Android client profile in Settings, try another v3 anisette source, and wait before retrying"
+                    else -> null
+                }
             )
         }
         return response

@@ -310,7 +310,7 @@ class DeveloperSession(
         // As isideload's developer session: Grand Slam's base headers, the
         // attestation headers, and the account's developer token.
         val data = anisette.fetch()
-        val headers = GrandSlam.baseHeaders() + data.headers() + mapOf(
+        val headers = GrandSlam.baseHeaders() + data.headers() + data.clientHeaders() + mapOf(
             "X-Apple-GS-Token" to token,
             "X-Apple-I-Identity-Id" to session.adsid
         )
