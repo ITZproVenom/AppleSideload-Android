@@ -275,8 +275,17 @@ class AppleAuthTest {
         )
     }
 
-    private fun auth(apple: FakeApple) = AppleAuth(
-        FixedAnisette,
+    private object AndroidAnisette : AnisetteProvider {
+        override val name = "Android-profile test data"
+        override fun isAvailable() = true
+        override fun fetch() = FixedAnisette.fetch().copy(
+            clientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
+            userAgent = "akd/1.0 CFNetwork/808.1.4"
+        )
+    }
+
+    private fun auth(apple: FakeApple, anisette: AnisetteProvider = FixedAnisette) = AppleAuth(
+        anisette,
         GrandSlam(Http(), bagUrl = "${apple.base}/lookup", retryDelaysMs = listOf(1, 1)),
         authUrl = "${apple.base}/auth"
     )
@@ -370,14 +379,18 @@ class AppleAuthTest {
     @Test
     fun aCodeByTextMessage() = FakeApple().use { apple ->
         apple.secondFactor = "secondaryAuth"
-        val auth = auth(apple)
+        val auth = auth(apple, AndroidAnisette)
         val needed = auth.signIn(apple.email, apple.password) as AuthResult.PhoneCodeRequired
         assertEquals(listOf(TrustedPhoneNumber(2, "+1 (•••) •••-••12")), needed.numbers)
         assertEquals("application/json", apple.requests.single { it.path == "/auth" }.headers["accept"])
+        val androidSignIn = apple.requests.first { it.path == "/gs" }
+        assertTrue(androidSignIn.headers["x-mme-client-info"].orEmpty().contains("<Android;"))
+        assertEquals(GrandSlam.CLIENT_INFO, apple.requests.single { it.path == "/auth" }.headers["x-mme-client-info"])
 
         auth.requestPhoneCode(needed.pending, 2)
         val send = apple.requests.single { it.path == "/auth/verify/phone" }
         assertEquals("PUT", send.method)
+        assertEquals(GrandSlam.CLIENT_INFO, send.headers["x-mme-client-info"])
         assertEquals(2, send.json.getJSONObject("phoneNumber").getInt("id"))
         assertEquals("sms", send.json.getString("mode"))
 
