@@ -414,8 +414,10 @@ class SideloadEngine(
     fun ensureIdentity(developer: DeveloperSession, team: DeveloperTeam): Pair<SigningIdentity, String?> {
         val remote = developer.listCertificates(team.teamId)
         identityStore.loadSigningIdentity()?.let { existing ->
-            val serial = existing.certificate.serialNumber.toString(16).uppercase()
-            val match = remote.firstOrNull { it.serialNumber.equals(serial, ignoreCase = true) }
+            // Apple may pad a serial number with leading zeros; compare the numbers, not the text.
+            fun plain(serial: String) = serial.trim().trimStart('0').uppercase()
+            val serial = plain(existing.certificate.serialNumber.toString(16))
+            val match = remote.firstOrNull { plain(it.serialNumber) == serial }
             if (match != null && existing.expiresAt > System.currentTimeMillis()) {
                 val machineId = match.machineId ?: identityStore.loadMachineId()
                 machineId?.let { identityStore.saveMachineId(it) }
