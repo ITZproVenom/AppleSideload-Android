@@ -30,7 +30,9 @@ class BundleSigner(
      * checks that a bundle's identifier is covered by the profile inside it,
      * so an extension cannot borrow the main app's explicit-identifier profile.
      */
-    private val nestedProfiles: Map<String, ProvisioningProfile> = emptyMap()
+    private val nestedProfiles: Map<String, ProvisioningProfile> = emptyMap(),
+    /** Certificates above the signing certificate (Apple's intermediate), embedded in every signature. */
+    private val certificateChain: List<java.security.cert.X509Certificate> = emptyList()
 ) {
 
     /** Reports each bundle as it is signed, for the install screen. */
@@ -191,7 +193,9 @@ class BundleSigner(
             }
 
             override fun build(image: ByteArray, codeLimit: Int): ByteArray {
-                val directories = listOf(Blobs.HASH_SHA256, Blobs.HASH_SHA1).map { hashType ->
+                // One SHA-256 directory, as Xcode produces for current iOS. A second SHA-1
+                // directory would need its own entry in the signed hash list.
+                val directories = listOf(Blobs.HASH_SHA256).map { hashType ->
                     val special = buildMap {
                         infoPlist?.let { put(Blobs.SLOT_INFOSLOT, Blobs.digest(hashType, it)) }
                         put(Blobs.SLOT_REQUIREMENTS, Blobs.digest(hashType, requirements))
@@ -219,11 +223,10 @@ class BundleSigner(
                     add(Blobs.SLOT_REQUIREMENTS to requirements)
                     entitlementsBlob?.let { add(Blobs.SLOT_ENTITLEMENTS to it) }
                     derBlob?.let { add(Blobs.SLOT_DER_ENTITLEMENTS to it) }
-                    add(Blobs.SLOT_ALTERNATE_CODEDIRECTORY to directories[1])
                     add(
                         Blobs.SLOT_SIGNATURESLOT to Blobs.blob(
                             Blobs.MAGIC_BLOBWRAPPER,
-                            Cms.sign(directories[0], directories, identity)
+                            Cms.sign(directories[0], directories, identity, certificateChain)
                         )
                     )
                 }

@@ -173,7 +173,16 @@ class SideloadEngine(
                         developer.downloadProvisioningProfile(team.teamId, appId.appIdId)
                     )
                 }
-            val signer = BundleSigner(identity, profile, extra, nestedProfiles)
+            // Apple's intermediate certificate goes into the signature too; the
+            // device does not look it up while installing.
+            val chain = listOfNotNull(
+                dev.applesideload.signing.IssuerChain.fetch(identity.certificate).also {
+                    if (it == null) {
+                        Log.w(LogTag.SIGN, "could not download Apple's intermediate certificate; the signature will not carry it")
+                    }
+                }
+            )
+            val signer = BundleSigner(identity, profile, extra, nestedProfiles, chain)
             signer.onProgress = { onStep(SideloadStep.Signing(it)) }
             signer.sign(bundle)
 
