@@ -49,6 +49,7 @@ class AppleAuthTest {
         @Volatile var resyncDataAsPlistData = false
         @Volatile var bareSessionPayload = false
         @Volatile var autoTrustedDeviceCode = false
+        @Volatile var refuseWindowsAuthEndpoints = false
         val initStatuses = ConcurrentLinkedDeque<Int>()
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iterations = 1000
@@ -81,6 +82,11 @@ class AppleAuthTest {
             val headers = exchange.requestHeaders.entries.associate { it.key.lowercase() to it.value.first() }
             val path = exchange.requestURI.path
             requests += Recorded(exchange.requestMethod, path, headers, body)
+            if (refuseWindowsAuthEndpoints && path in setOf("/tds", "/validate", "/auth", "/auth/verify/phone", "/auth/verify/phone/securitycode") &&
+                headers["x-mme-client-info"].orEmpty().contains("<Windows;")) {
+                reply(exchange, 403, "text/plain", "forbidden".toByteArray())
+                return
+            }
             when (path) {
                 "/lookup" -> plist(
                     exchange,
@@ -358,6 +364,19 @@ class AppleAuthTest {
     }
 
     @Test
+    fun authEndpointsRetryBare403AsMacAfterWindowsRefusal() = FakeApple().use { apple ->
+        apple.secondFactor = "trustedDeviceSecondaryAuth"
+        apple.refuseWindowsAuthEndpoints = true
+        val result = auth(apple, ResyncAnisette()).signIn(apple.email, apple.password)
+        assertTrue(result is AuthResult.TrustedDeviceCodeRequired)
+
+        val attempts = apple.requests.filter { it.path == "/tds" }
+        assertEquals(2, attempts.size)
+        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, attempts.first().headers["x-mme-client-info"])
+        assertEquals(GrandSlam.CLIENT_INFO, attempts.last().headers["x-mme-client-info"])
+    }
+
+    @Test
     fun automaticallySentTrustedDeviceCodeShowsPromptBeforeDeveloperToken() = FakeApple().use { apple ->
         apple.autoTrustedDeviceCode = true
         val auth = auth(apple)
@@ -454,7 +473,7 @@ class AppleAuthTest {
         assertEquals(identity, push.headers["x-apple-identity-token"])
         assertEquals("17106176", push.headers["x-apple-i-md-rinfo"])
         assertEquals("OTP-VALUE", push.headers["x-apple-i-md"])
-        assertEquals(GrandSlam.CLIENT_INFO, push.headers["x-mme-client-info"])
+        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, push.headers["x-mme-client-info"])
 
         try {
             auth.submitTrustedDeviceCode(pending, "000000")
@@ -480,12 +499,12 @@ class AppleAuthTest {
         assertEquals("application/json", apple.requests.single { it.path == "/auth" }.headers["accept"])
         val windowsSignIn = apple.requests.first { it.path == "/gs" }
         assertTrue(windowsSignIn.headers["x-mme-client-info"].orEmpty().contains("<Windows;"))
-        assertEquals(GrandSlam.CLIENT_INFO, apple.requests.single { it.path == "/auth" }.headers["x-mme-client-info"])
+        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, apple.requests.single { it.path == "/auth" }.headers["x-mme-client-info"])
 
         auth.requestPhoneCode(needed.pending, 2)
         val send = apple.requests.single { it.path == "/auth/verify/phone" }
         assertEquals("PUT", send.method)
-        assertEquals(GrandSlam.CLIENT_INFO, send.headers["x-mme-client-info"])
+        assertEquals(RemoteAnisetteProvider.WINDOWS_CLIENT_INFO, send.headers["x-mme-client-info"])
         assertEquals(2, send.json.getJSONObject("phoneNumber").getInt("id"))
         assertEquals("sms", send.json.getString("mode"))
 
