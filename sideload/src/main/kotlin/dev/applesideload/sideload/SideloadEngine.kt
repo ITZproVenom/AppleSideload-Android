@@ -64,6 +64,11 @@ const val REMOTE_PAIRING_ONLY_FROM_IOS = 27
  * the install, the pairing file it needs to refresh apps on the iPhone by
  * itself over LocalDevVPN. Nothing reports success it did not get.
  */
+internal fun liveContainerKeychainGroups(teamId: String): Plist.Arr = Plist.Arr(
+    listOf(Plist.Str("$teamId.com.kdt.livecontainer.shared")) +
+        (1..2).map { Plist.Str("$teamId.com.kdt.livecontainer.shared.$it") }
+)
+
 class SideloadEngine(
     private val context: Context,
     private val anisette: AnisetteProvider,
@@ -155,12 +160,7 @@ class SideloadEngine(
             applySpecialBehaviour(bundle, extensions, special, groupId, identity, machineId, device.info.udid)
 
             val extra = if (special.usesLiveContainerKeychain) {
-                mapOf(
-                    "keychain-access-groups" to Plist.Arr(
-                        listOf(Plist.Str("${team.teamId}.com.kdt.livecontainer.shared")) +
-                            (1 until 128).map { Plist.Str("${team.teamId}.com.kdt.livecontainer.shared.$it") }
-                    )
-                )
+                mapOf("keychain-access-groups" to liveContainerKeychainGroups(team.teamId))
             } else {
                 emptyMap()
             }
@@ -175,13 +175,10 @@ class SideloadEngine(
                 }
             // Apple's intermediate certificate goes into the signature too; the
             // device does not look it up while installing.
-            val chain = listOfNotNull(
-                dev.applesideload.signing.IssuerChain.fetch(identity.certificate).also {
-                    if (it == null) {
-                        Log.w(LogTag.SIGN, "could not download Apple's intermediate certificate; the signature will not carry it")
-                    }
-                }
-            )
+            val chain = dev.applesideload.signing.IssuerChain.fetch(identity.certificate)
+            if (chain.isEmpty()) {
+                Log.w(LogTag.SIGN, "could not embed Apple's intermediate certificate; signature verification may fail on-device")
+            }
             val signer = BundleSigner(identity, profile, extra, nestedProfiles, chain)
             signer.onProgress = { onStep(SideloadStep.Signing(it)) }
             signer.sign(bundle)

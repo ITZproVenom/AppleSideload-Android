@@ -21,4 +21,12 @@ class IssuerChainTest {
         assertTrue(IssuerChain.candidateUrls("ftp://certs.apple.com/x.der").isEmpty())
         assertTrue(IssuerChain.candidateUrls("not a url").isEmpty())
     }
+    @Test
+    fun `bundled Apple developer chain contains WWDR G3 and its root`() {
+        val chain = IssuerChain.bundledFallbackChain()
+        assertEquals(2, chain.size)
+        assertTrue(chain[0].subjectX500Principal.name.contains("Worldwide Developer Relations"))
+        assertEquals(chain[0].issuerX500Principal, chain[1].subjectX500Principal)
+        chain[0].verify(chain[1].publicKey)
+    }
 }
