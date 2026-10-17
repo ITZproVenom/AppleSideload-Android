@@ -66,7 +66,8 @@ class PendingAuth internal constructor(
     internal val appleId: String,
     internal val adsid: String,
     internal val idmsToken: String,
-    internal val password: String
+    internal val password: String,
+    internal val anisette: AnisetteProvider
 ) {
     override fun toString(): String = "PendingAuth(appleId=${Redaction.apply(appleId)})"
 }
@@ -107,6 +108,7 @@ class AppleAuth(
     /** Where the text-message code endpoints live; tests point it elsewhere. */
     private val authUrl: String = AUTH
 ) {
+    val anisetteProvider: AnisetteProvider get() = anisette
 
     fun signIn(appleId: String, password: String): AuthResult {
         Log.i(LogTag.APPLE, "signing in to Apple as ${Redaction.apply(appleId)}")
@@ -177,7 +179,7 @@ class AppleAuth(
         val spd = decryptSpd(second["spd"]?.asData ?: throw incomplete("the session payload"), srp)
         val adsid = spd["adsid"]?.asString ?: throw incomplete("the account identifier")
         val idmsToken = spd["GsIdmsToken"]?.asString ?: throw incomplete("the account token")
-        val pending = PendingAuth(appleId, adsid, idmsToken, password)
+        val pending = PendingAuth(appleId, adsid, idmsToken, password, anisette)
 
         val secondStatus = second["Status"]
         when (val au = secondStatus?.get("au")?.asString) {
@@ -291,7 +293,11 @@ class AppleAuth(
     /** Asks Apple to push a code to the account's trusted devices. */
     fun requestTrustedDeviceCode(pending: PendingAuth) {
         val data = anisette.fetch()
-        val response = grandSlam.send(gsUrl("trustedDeviceSecondaryAuth"), headers = twoFactorHeaders(pending, data))
+        val response = authRequest(
+            data,
+            gsUrl("trustedDeviceSecondaryAuth"),
+            headers = twoFactorHeaders(pending, data)
+        )
         if (response.code !in 200..299) {
             throw AppleAuthException(
                 response.code,
@@ -314,9 +320,10 @@ class AppleAuth(
         val reply = try {
             Http.parsePlist(
                 url,
-                grandSlam.send(
+                authRequest(
+                    data,
                     url,
-                    headers = twoFactorHeaders(pending, data) + data.clientHeaders() + ("security-code" to code)
+                    headers = twoFactorHeaders(pending, data) + ("security-code" to code)
                 )
             )
         } catch (error: IOException) {
@@ -335,7 +342,7 @@ class AppleAuth(
     fun trustedPhoneNumbers(pending: PendingAuth): List<TrustedPhoneNumber> {
         val data = anisette.fetch()
         val response = try {
-            grandSlam.send(authUrl, headers = twoFactorHeaders(pending, data), json = true)
+            authRequest(data, authUrl, headers = twoFactorHeaders(pending, data), json = true)
         } catch (error: IOException) {
             Log.w(LogTag.APPLE, "the trusted phone numbers could not be loaded: ${error.message}")
             return emptyList()
@@ -364,7 +371,8 @@ class AppleAuth(
             .put("phoneNumber", JSONObject().put("id", numberId))
             .put("mode", "sms")
             .toString()
-        val response = grandSlam.send(
+        val response = authRequest(
+            data,
             "$authUrl/verify/phone",
             method = "PUT",
             headers = twoFactorHeaders(pending, data),
@@ -400,7 +408,8 @@ class AppleAuth(
             .put("phoneNumber", JSONObject().put("id", numberId))
             .put("mode", "sms")
             .toString()
-        val response = grandSlam.send(
+        val response = authRequest(
+            data,
             "$authUrl/verify/phone/securitycode",
             method = "POST",
             headers = twoFactorHeaders(pending, data),
@@ -453,6 +462,32 @@ class AppleAuth(
         "the verification code was not accepted" + if (detail.isNullOrBlank()) "" else " ($detail)",
         alternative = "check the code and enter it again"
     )
+
+    /** The URL and JSON verification pages sometimes refuse a client identity with a bare 403.
+     * Retry that request once as macOS's akd, as SideInstaller does; preserve server-provided
+     * anisette headers and any serviceErrors response (which is a real account-level error).
+     */
+    private fun authRequest(
+        data: AnisetteData,
+        url: String,
+        method: String = "GET",
+        headers: Map<String, String> = emptyMap(),
+        body: ByteArray? = null,
+        json: Boolean = false
+    ): HttpResponse {
+        val primaryHeaders = headers + data.clientHeaders()
+        val first = grandSlam.send(url, method, primaryHeaders, body, json)
+        val client = data.clientInfo.orEmpty()
+        if (first.code != 403 || "serviceErrors" in first.text || client == GrandSlam.CLIENT_INFO) return first
+        Log.w(LogTag.APPLE, "$url refused the anisette client profile; retrying this verification request as a Mac")
+        return grandSlam.send(
+            url,
+            method,
+            headers + data.clientHeaders() + ("X-Mme-Client-Info" to GrandSlam.CLIENT_INFO),
+            body,
+            json
+        )
+    }
 
     /** isideload's build_2fa_headers: the attestation headers, the account's identity token and routing info. */
     private fun twoFactorHeaders(pending: PendingAuth, data: AnisetteData): Map<String, String> =
