@@ -43,3 +43,22 @@ jobs:
           print(f"::notice title=rcodesign-{sys.argv[1]}::{t}")
           PY
           done
+      - name: Inspect the signature structure in detail
+        run: |
+          RC=/tmp/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
+          APP=$(echo signing/build/real-ipa/tree/Payload/*.app)
+          B="$APP/Frameworks/OpenSSL.framework/OpenSSL"
+          {
+            echo "=== superblob"; $RC extract superblob "$B" 2>&1 | head -40
+            echo "=== load commands (signature related)"; $RC extract macho-load-commands "$B" 2>&1 | grep -i -B1 -A3 "signature\|linkedit" | head -30
+            echo "=== linkedit"; $RC extract linkedit-info "$B" 2>&1 | head -20
+            $RC extract cms-raw "$B" > /tmp/cms.der 2>/tmp/cms.err; echo "cms-raw bytes: $(stat -c%s /tmp/cms.der)"; head -c 400 /tmp/cms.err
+            $RC extract code-directory-raw "$B" > /tmp/cd.bin 2>/dev/null; echo "cd bytes: $(stat -c%s /tmp/cd.bin)"
+            echo "=== asn1parse"; openssl asn1parse -inform DER -in /tmp/cms.der -i 2>&1 | head -70
+            echo "=== openssl verify"; openssl cms -verify -inform DER -in /tmp/cms.der -content /tmp/cd.bin -binary -noverify -out /dev/null 2>&1 | head -10
+          } > /tmp/deep.txt 2>&1
+          python3 - <<'PY'
+          t = open("/tmp/deep.txt", errors="replace").read()[:40000]
+          t = t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print("::notice title=deep-cms::" + t)
+          PY
