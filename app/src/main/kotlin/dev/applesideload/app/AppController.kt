@@ -877,12 +877,41 @@ class AppController(private val app: SideloadApplication) : Controls {
         return run("Signing in to Apple") {
             app.settings.lastAppleId = appleId.trim()
             set { it.copy(twoFactor = null, settingsRevision = it.settingsRevision + 1) }
-            val auth = AppleAuth(app.anisetteProvider())
-            when (val result = auth.signIn(appleId.trim(), password)) {
+            val candidates = AnisetteServers.candidates(app.settings.effectiveAnisetteAddress, _state.value.anisetteServers).take(6)
+            val refusals = mutableMapOf<AnisetteServers.ClientKind, Int>()
+            var lastError: Exception? = null
+            var selected: Pair<AppleAuth, AuthResult>? = null
+            for ((index, address) in candidates.withIndex()) {
+                val kind = AnisetteServers.clientKind(address, _state.value.anisetteServers)
+                if ((refusals[kind] ?: 0) >= 2) {
+                    Log.i(LogTag.APPLE, "skipping $address: Apple has repeatedly refused this client identity")
+                    continue
+                }
+                set { it.copy(busy = "Signing in to Apple (${index + 1}/${candidates.size})") }
+                val auth = AppleAuth(app.anisetteProvider(address, _state.value.anisetteServers))
+                val result = try {
+                    auth.signIn(appleId.trim(), password)
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    lastError = error
+                    val authError = error as? AppleAuthException
+                    if (authError?.code == 429 || authError?.code == -20101 || authError?.code == -20970) throw error
+                    if (authError?.code == 503 || authError?.code == -80045) {
+                        refusals[kind] = (refusals[kind] ?: 0) + 1
+                    }
+                    Log.w(LogTag.APPLE, "sign-in through $address failed; trying another anisette server: ${error.message}")
+                    continue
+                }
+                selected = auth to result
+                break
+            }
+            val (auth, result) = selected ?: throw lastError ?: AppleAuthException(0, "all configured anisette servers failed")
+            app.settings.rememberAnisetteAddress(auth.anisetteProvider.serverAddress)
+            set { it.copy(settingsRevision = it.settingsRevision + 1) }
+            when (result) {
                 is AuthResult.Success -> finishSignIn(auth, result.session)
                 is AuthResult.TrustedDeviceCodeRequired ->
                     set { it.copy(twoFactor = TwoFactorPrompt(result.pending)) }
-
                 is AuthResult.PhoneCodeRequired ->
                     set { it.copy(twoFactor = TwoFactorPrompt(result.pending, result.numbers)) }
             }
@@ -893,7 +922,7 @@ class AppController(private val app: SideloadApplication) : Controls {
         val prompt = _state.value.twoFactor ?: return refuse("No sign-in is waiting for a code.")
         if (code.isBlank()) return refuse("Enter the verification code.")
         return run("Checking the verification code") {
-            val auth = AppleAuth(app.anisetteProvider())
+            val auth = AppleAuth(prompt.pending.anisette)
             val result = if (prompt.numberId != null) {
                 auth.submitPhoneCode(prompt.pending, prompt.numberId, code.trim())
             } else {
@@ -918,7 +947,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     override fun requestPhoneCode(numberId: Int): Action {
         val prompt = _state.value.twoFactor ?: return refuse("No sign-in is waiting for a code.")
         return run("Sending a code by SMS") {
-            AppleAuth(app.anisetteProvider()).requestPhoneCode(prompt.pending, numberId)
+            AppleAuth(prompt.pending.anisette).requestPhoneCode(prompt.pending, numberId)
             set { it.copy(twoFactor = prompt.copy(numberId = numberId)) }
         }
     }
@@ -926,7 +955,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     /** The password is never kept: a new sign-in asks for it again. */
     private fun finishSignIn(auth: AppleAuth, signedIn: AppleSession) {
         val withToken = auth.fetchAppToken(signedIn)
-        val developer = DeveloperSession(withToken, app.anisetteProvider(), auth)
+        val developer = DeveloperSession(withToken, auth.anisetteProvider, auth)
         val teams = developer.listTeams()
         set {
             it.copy(
