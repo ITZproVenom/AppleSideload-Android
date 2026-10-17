@@ -19,14 +19,48 @@ import java.util.UUID
 /** Settings that survive a restart, kept deliberately small. */
 class Settings(context: Context) {
     private val preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val filesDir = context.filesDir
 
-    /** The anisette source. Empty means the bundled default. */
+    /** The anisette source. Empty means the release default, or the old default for existing users. */
     var anisetteAddress: String
         get() = preferences.getString(KEY_ANISETTE, "") ?: ""
         set(value) = preferences.edit().putString(KEY_ANISETTE, value.trim().trimEnd('/')).apply()
 
     val effectiveAnisetteAddress: String
-        get() = anisetteAddress.ifBlank { AnisetteServers.default.address }
+        get() {
+            val saved = anisetteAddress
+            if (saved.isNotBlank()) return saved
+            if (preferences.contains(KEY_ANISETTE)) return AnisetteServers.default.address
+            // Before Windows ADI servers became the default, the unset source
+            // used SideStore's Android ADI library. Preserve that identity for
+            // existing installs instead of silently forcing a new device/code.
+            val hasLegacyIdentity = File(filesDir, "anisette-identity.properties").isFile
+            return if (hasLegacyIdentity) AnisetteServers.legacyDefault.address else AnisetteServers.default.address
+        }
+
+    fun anisetteIdentityFile(address: String, library: AnisetteServers.Library): File {
+        val legacy = File(filesDir, "anisette-identity.properties")
+        val savedAddress = anisetteAddress.ifBlank {
+            if (legacy.isFile) AnisetteServers.legacyDefault.address else ""
+        }
+        val target = File(filesDir, "anisette-${library.name.lowercase()}-identity.properties")
+        // Migrate the old single identity only into the library of the server
+        // it was actually used with. Leave it intact when fallback moves to a
+        // different ADI library; that server will get a separate identity.
+        if (legacy.isFile && savedAddress.isNotBlank() && normalizeServer(address) == normalizeServer(savedAddress) && !target.exists()) {
+            runCatching { legacy.copyTo(target, overwrite = false) }
+        }
+        return target
+    }
+
+    fun anisetteIdentityFile(address: String, servers: List<AnisetteServers.Server> = AnisetteServers.bundled): File =
+        anisetteIdentityFile(address, AnisetteServers.libraryOf(address, servers))
+
+    private fun normalizeServer(address: String) = address.trim().trimEnd('/').lowercase()
+
+    fun rememberAnisetteAddress(address: String) {
+        anisetteAddress = address
+    }
 
     var androidClientProfile: Boolean
         get() = preferences.getBoolean(KEY_ANDROID_PROFILE, false)
@@ -109,10 +143,14 @@ class SideloadApplication : Application() {
     }
 
     /** Built fresh so changed anisette source/profile settings take effect at once. */
-    fun anisetteProvider(): AnisetteProvider = RemoteAnisetteProvider(
-        baseUrl = settings.effectiveAnisetteAddress,
+    fun anisetteProvider(
+        address: String = settings.effectiveAnisetteAddress,
+        servers: List<AnisetteServers.Server> = AnisetteServers.bundled
+    ): AnisetteProvider = RemoteAnisetteProvider(
+        baseUrl = address,
         deviceId = settings.deviceId,
-        store = FileAnisetteStore(File(filesDir, "anisette-identity.properties")),
-        useAndroidClientInfo = settings.androidClientProfile
+        useAndroidClientInfo = settings.androidClientProfile,
+        servers = servers,
+        storeForLibrary = { library -> FileAnisetteStore(settings.anisetteIdentityFile(library)) }
     )
 }
