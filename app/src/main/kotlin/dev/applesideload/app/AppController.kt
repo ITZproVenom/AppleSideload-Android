@@ -955,7 +955,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     /** The password is never kept: a new sign-in asks for it again. */
     private fun finishSignIn(auth: AppleAuth, signedIn: AppleSession) {
         val withToken = auth.fetchAppToken(signedIn)
-        val developer = DeveloperSession(withToken, auth.provider, auth)
+        val developer = DeveloperSession(withToken, auth.anisetteProvider, auth)
         val teams = developer.listTeams()
         set {
             it.copy(
