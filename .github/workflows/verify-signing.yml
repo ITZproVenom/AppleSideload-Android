@@ -15,7 +15,19 @@ jobs:
           curl -fsSL -o /tmp/SideStore.ipa https://github.com/SideStore/SideStore/releases/download/nightly/SideStore.ipa
           curl -fsSL https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz | tar xz -C /tmp
       - name: Sign it with the app's own signer
-        run: SAMPLE_IPA=/tmp/SideStore.ipa SIGNED_OUT=$PWD/signing/build/real-ipa ./gradlew :signing:test --tests '*RealIpaSigningCheck*' --stacktrace
+        run: |
+          set +e
+          SAMPLE_IPA=/tmp/SideStore.ipa SIGNED_OUT=$PWD/signing/build/real-ipa ./gradlew :signing:test --tests '*RealIpaSigningCheck*' --stacktrace > /tmp/gradle.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            { tail -c 6000 /tmp/gradle.log; echo; echo "--- test reports"; cat signing/build/test-results/test/*RealIpa*.xml 2>/dev/null | head -c 6000; } > /tmp/fail.txt
+            python3 - <<'PY'
+          t = open("/tmp/fail.txt", errors="replace").read()
+          t = t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print("::error title=signing-step-failed::" + t)
+          PY
+          fi
+          exit $code
       - name: Check every binary with rcodesign
         run: |
           RC=/tmp/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
