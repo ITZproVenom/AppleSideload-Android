@@ -36,8 +36,10 @@ notes of the next release.
   incorrect-credentials guidance. Developer-service error `2160` now tells
   users to verify their Apple Account email at account.apple.com.
 
-### Fixes
-- Error names in the Activity log stay readable in release builds. The code
+- The iPhone now gets Apple's WWDR intermediate and root inside each code
+  signature even when Apple's certificate-download endpoint is unreachable.
+  LiveContainer's signing entitlements are capped at the three keychain groups
+  supported by free provisioning, avoiding iOS's `0xe8008016` rejection.
   shrinker had shortened the app's own error names to single letters.
 - On iOS 27 the iPhone can close its heartbeat service as soon as it opens.
   The log now says so as information instead of a warning; the connection
