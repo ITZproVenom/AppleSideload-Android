@@ -151,6 +151,6 @@ class SideloadApplication : Application() {
         deviceId = settings.deviceId,
         useAndroidClientInfo = settings.androidClientProfile,
         servers = servers,
-        storeForLibrary = { library -> FileAnisetteStore(settings.anisetteIdentityFile(library)) }
+        storeForLibrary = { library -> FileAnisetteStore(settings.anisetteIdentityFile(address, library)) }
     )
 }
