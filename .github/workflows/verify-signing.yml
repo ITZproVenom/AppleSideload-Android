@@ -17,10 +17,10 @@ jobs:
       - name: Sign it with the app's own signer
         run: |
           set +e
-          SAMPLE_IPA=/tmp/SideStore.ipa SIGNED_OUT=$PWD/signing/build/real-ipa ./gradlew :signing:test --tests '*RealIpaSigningCheck*' --stacktrace > /tmp/gradle.log 2>&1
+          SAMPLE_IPA=/tmp/SideStore.ipa SIGNED_OUT=$PWD/signing/build/real-ipa ./gradlew :signing:testDebugUnitTest --tests '*RealIpaSigningCheck*' --stacktrace > /tmp/gradle.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
-            { grep -n -A8 "What went wrong\|^e: \|FAILED\|Exception\|error:" /tmp/gradle.log | head -c 5000; echo; echo "--- test report"; grep -h -m12 -A6 "<failure\|Exception" signing/build/test-results/test/*RealIpa*.xml 2>/dev/null | head -c 4000; } > /tmp/fail.txt
+            { grep -n -A8 "What went wrong\|^e: \|FAILED\|Exception\|error:" /tmp/gradle.log | head -c 5000; echo; echo "--- test report"; grep -h -m12 -A6 "<failure\|Exception" signing/build/test-results/*/*RealIpa*.xml 2>/dev/null | head -c 4000; } > /tmp/fail.txt
             python3 - <<'PY'
           t = open("/tmp/fail.txt", errors="replace").read()
           t = t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
