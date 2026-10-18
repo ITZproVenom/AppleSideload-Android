@@ -423,26 +423,7 @@ class AnisetteV3Test {
 
         assertNotEquals(windows.deviceId, android.deviceId)
         assertEquals(windows.deviceId, windowsAgain.deviceId)
-        assertEquals(2, source.sessions.get(), "each ADI library provisions only its own identity")
-        assertEquals(2, stores.size)
-    }
-
-    @Test
-    fun identitiesRemainSeparateWhenServerChangesAdiLibrary() = both { source, apple ->
-        val stores = mutableMapOf<AnisetteServers.Library, MemoryAnisetteStore>()
-        val storeFactory: (AnisetteServers.Library) -> AnisetteStore = { library -> stores.getOrPut(library) { MemoryAnisetteStore() } }
-        fun fetch() = provider(source, apple, MemoryAnisetteStore(), storeForLibrary = storeFactory).fetch()
-
-        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
-        val windows = fetch()
-        source.advertisedClientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-        val android = fetch()
-        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
-        val windowsAgain = fetch()
-
-        assertNotEquals(windows.deviceId, android.deviceId)
-        assertEquals(windows.deviceId, windowsAgain.deviceId)
-        assertEquals(2, source.sessions.get(), "one persistent identity per ADI library")
+        assertEquals("each ADI library provisions only its own identity", 2, source.sessions.get())
         assertEquals(2, stores.size)
     }
 
