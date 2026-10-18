@@ -16,14 +16,12 @@ notes of the next release.
 - The password proof (SRP) had three calculation errors, so Apple would have
   refused even the right password. It now matches the reference
   implementation, checked against values computed with it.
-- The app sets up and persists separate anisette identities for Android,
-  Windows and Mac ADI servers. New installs start with a Windows-ADI server;
-  existing installs retain their previous server, and fallback tries Windows
-  then Android, with Mac last. Server-provided client metadata selects the
-  profile when available, and bare 403 replies from Apple authentication
-  endpoints retry once as Mac. Windows hsc 434 resync is relayed through the
-  configured v3 server and retried once. No extra PC or local ADI library is
-  required.
+- The app classifies anisette sources as Android, Windows or Mac ADI, keeps a
+  separate identity for each library, and prefers the last successful server.
+  If Apple refuses a client profile or a server rejects an identity, sign-in
+  fails over to another compatible server without discarding other identities.
+  New installs prefer Windows ADI; existing installs keep their prior server.
+  Bare 403s from OTP endpoints retry once as Mac.
 - The token for Apple's developer service is requested and decrypted the way
   Apple sends it now.
 - When Apple is busy (*429 Too Many Requests*), the app waits and tries twice
