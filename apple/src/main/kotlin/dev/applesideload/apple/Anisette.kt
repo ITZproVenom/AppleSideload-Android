@@ -476,7 +476,7 @@ class RemoteAnisetteProvider(
                 alternative = "try another v3 anisette server"
             )
             is HeadersReply.Headers -> anisetteData(identity, data).also {
-                CACHE["$base|$useAndroidClientInfo"] = Cached(it, System.nanoTime())
+                CACHE[cacheKey(identity)] = Cached(it, System.nanoTime())
                 Log.i(LogTag.APPLE, "the anisette source applied Apple's identity resync")
             }
         }
@@ -486,7 +486,7 @@ class RemoteAnisetteProvider(
         val clientHeaders = selectedClientHeaders()
         val identityStore = activeStore
         var identity = identityStore.load() ?: provision(clientHeaders)
-        val cacheKey = "$base|$useAndroidClientInfo"
+        val cacheKey = cacheKey(identity)
         CACHE[cacheKey]?.let { cached ->
             if (cached.data.deviceId == identity.deviceId && System.nanoTime() - cached.madeAt < CACHE_NANOS) {
                 return cached.data
@@ -513,6 +513,8 @@ class RemoteAnisetteProvider(
             }
         }
     }
+
+    private fun cacheKey(identity: AnisetteIdentity): String = "$base|${selectedClientProfile().info}|${identity.deviceId}"
 
     private fun anisetteData(identity: AnisetteIdentity, reply: HeadersReply.Headers) = selectedClientProfile().let { profile ->
         AnisetteData(
