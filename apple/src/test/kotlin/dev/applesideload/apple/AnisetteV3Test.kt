@@ -387,6 +387,32 @@ class AnisetteV3Test {
     }
 
     @Test
+    fun identitiesStaySeparateWhenServerChangesAdiLibrary() = both { source, apple ->
+        val stores = mutableMapOf<AnisetteServers.Library, MemoryAnisetteStore>()
+        val storeFactory: (AnisetteServers.Library) -> AnisetteStore = { library ->
+            stores.getOrPut(library) { MemoryAnisetteStore() }
+        }
+        fun providerForProfile() = RemoteAnisetteProvider(
+            baseUrl = source.base,
+            http = Http(timeoutMs = 10_000),
+            storeForLibrary = storeFactory,
+            grandSlam = GrandSlam(Http(timeoutMs = 10_000), bagUrl = "${apple.base}/lookup")
+        )
+
+        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        val windows = providerForProfile().fetch()
+        source.advertisedClientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        val android = providerForProfile().fetch()
+        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        val windowsAgain = providerForProfile().fetch()
+
+        assertNotEquals(windows.deviceId, android.deviceId)
+        assertEquals(windows.deviceId, windowsAgain.deviceId)
+        assertEquals(2, source.sessions.get(), "each ADI library provisions only its own identity")
+        assertEquals(2, stores.size)
+    }
+
+    @Test
     fun legacyAndroidProfileMatchesItsAnisetteDataOnProvisioningRequests() = both { source, apple ->
         val data = provider(source, apple, MemoryAnisetteStore(), useAndroidClientInfo = true).fetch()
         val androidInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
