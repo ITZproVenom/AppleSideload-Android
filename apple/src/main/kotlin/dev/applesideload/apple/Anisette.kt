@@ -78,6 +78,7 @@ object AnisetteServers {
     enum class ClientKind { WINDOWS, MAC }
 
     private val windowsAdiHosts = setOf("ani.jkcoxson.com", "win.ani.sidestore.io", "ani2.stikstore.app")
+    private val macAdiHosts = setOf("mac-ani.jkcoxson.com", "new.ani.sidestore.io")
     private val stockClientPrefixes = listOf(
         "<MacBookPro13,2> <macOS;13.1;22C65>",
         "<MacBookPro15,1> <Mac OS X;10.15.2;19C57>"
@@ -113,7 +114,7 @@ object AnisetteServers {
     fun clientKind(address: String, servers: List<Server> = bundled): ClientKind =
         if (libraryOf(address, servers) == Library.MAC) ClientKind.MAC else ClientKind.WINDOWS
 
-    fun candidates(pick: String, servers: List<Server>): List<String> {
+    fun candidates(pick: String, servers: List<Server>, maxTries: Int? = null): List<String> {
         val seen = linkedSetOf<String>()
         val out = mutableListOf<String>()
         fun add(address: String) {
@@ -125,9 +126,14 @@ object AnisetteServers {
         add(pick)
         if (pickLibrary != Library.ANDROID) all.filter { libraryOf(it.address, all) == pickLibrary }.forEach { add(it.address) }
         all.filter { libraryOf(it.address, all) == Library.WINDOWS }.forEach { add(it.address) }
-        all.filter { libraryOf(it.address, all) != Library.MAC }.forEach { add(it.address) }
-        all.forEach { add(it.address) }
-        return out
+        all.filter { libraryOf(it.address, all) == Library.ANDROID }.forEach { add(it.address) }
+        all.filter { libraryOf(it.address, all) == Library.MAC }.forEach { add(it.address) }
+        val limit = maxTries ?: return out
+        if (out.size <= limit) return out
+        val bounded = out.take(limit).toMutableList()
+        val mac = out.firstOrNull { libraryOf(it, all) == Library.MAC }
+        if (mac != null && bounded.none { libraryOf(it, all) == Library.MAC }) bounded[bounded.lastIndex] = mac
+        return bounded.distinctBy(::normalize)
     }
 
     private fun normalize(address: String): String = address.trim().trimEnd('/').lowercase()
