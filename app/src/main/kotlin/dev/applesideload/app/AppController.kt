@@ -922,7 +922,7 @@ class AppController(private val app: SideloadApplication) : Controls {
         val prompt = _state.value.twoFactor ?: return refuse("No sign-in is waiting for a code.")
         if (code.isBlank()) return refuse("Enter the verification code.")
         return run("Checking the verification code") {
-            val auth = AppleAuth(prompt.pending.anisette)
+            val auth = AppleAuth(prompt.pending.anisetteProvider)
             val result = if (prompt.numberId != null) {
                 auth.submitPhoneCode(prompt.pending, prompt.numberId, code.trim())
             } else {
@@ -947,7 +947,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     override fun requestPhoneCode(numberId: Int): Action {
         val prompt = _state.value.twoFactor ?: return refuse("No sign-in is waiting for a code.")
         return run("Sending a code by SMS") {
-            AppleAuth(prompt.pending.anisette).requestPhoneCode(prompt.pending, numberId)
+            AppleAuth(prompt.pending.anisetteProvider).requestPhoneCode(prompt.pending, numberId)
             set { it.copy(twoFactor = prompt.copy(numberId = numberId)) }
         }
     }

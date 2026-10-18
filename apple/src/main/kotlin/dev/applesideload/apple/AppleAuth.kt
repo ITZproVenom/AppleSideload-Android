@@ -67,7 +67,7 @@ class PendingAuth internal constructor(
     internal val adsid: String,
     internal val idmsToken: String,
     internal val password: String,
-    internal val anisette: AnisetteProvider
+    val anisetteProvider: AnisetteProvider
 ) {
     override fun toString(): String = "PendingAuth(appleId=${Redaction.apply(appleId)})"
 }
