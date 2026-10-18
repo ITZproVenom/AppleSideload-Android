@@ -7,7 +7,9 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.zip.ZipFile
 
@@ -58,7 +60,11 @@ data class ReleaseBuild(
  * there (see [SideStoreFeatures]). A file already downloaded for the same
  * upload is reused, so trying again does not download it again.
  */
-class ReleaseDownloader(private val directory: File) {
+class ReleaseDownloader(
+    private val directory: File,
+    private val connectionFactory: ((String) -> HttpURLConnection)? = null,
+    private val retryDelay: (Long) -> Unit = { Thread.sleep(it) }
+) {
 
     init {
         directory.mkdirs()
@@ -82,6 +88,38 @@ class ReleaseDownloader(private val directory: File) {
         }
         val partial = File(directory, target.name + ".part")
         Log.i(LogTag.APP, "downloading ${build.source.title} ${build.label}")
+        var attempt = 0
+        while (true) {
+            attempt++
+            partial.delete()
+            try {
+                downloadAttempt(build, partial, onProgress)
+                break
+            } catch (error: IOException) {
+                partial.delete()
+                val httpError = error as? DownloadHttpException
+                val retryable = error !is SocketTimeoutException && error !is InterruptedIOException &&
+                    (httpError == null || httpError.status == 408 || httpError.status == 429 || httpError.status >= 500)
+                if (!retryable || attempt >= MAX_DOWNLOAD_ATTEMPTS) throw error
+                Log.w(LogTag.APP, "download interrupted (attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS): ${error.message}; retrying")
+                onProgress(0)
+                try {
+                    retryDelay(RETRY_DELAY_MS * attempt)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IOException("download retry was interrupted", interrupted)
+                }
+            }
+        }
+        // Older builds of the same source are not needed any more.
+        directory.listFiles()?.filter {
+            it.name.startsWith("${build.source.name}-") && it.name.endsWith(".ipa") && it != target
+        }?.forEach { it.delete() }
+        if (!partial.renameTo(target)) throw IOException("could not store the download")
+        return target
+    }
+
+    private fun downloadAttempt(build: ReleaseBuild, partial: File, onProgress: (Int) -> Unit) {
         val connection = open(build.url)
         try {
             val total = connection.contentLengthLong.takeIf { it > 0 } ?: build.size
@@ -111,12 +149,6 @@ class ReleaseDownloader(private val directory: File) {
         } finally {
             connection.disconnect()
         }
-        // Older builds of the same source are not needed any more.
-        directory.listFiles()?.filter {
-            it.name.startsWith("${build.source.name}-") && it.name.endsWith(".ipa") && it != target
-        }?.forEach { it.delete() }
-        if (!partial.renameTo(target)) throw IOException("could not store the download")
-        return target
     }
 
     private fun get(url: String): String {
@@ -129,7 +161,7 @@ class ReleaseDownloader(private val directory: File) {
     }
 
     private fun open(url: String): HttpURLConnection {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection = connectionFactory?.invoke(url) ?: (URL(url).openConnection() as HttpURLConnection)
         connection.connectTimeout = 20_000
         connection.readTimeout = 60_000
         connection.instanceFollowRedirects = true
@@ -138,7 +170,8 @@ class ReleaseDownloader(private val directory: File) {
         val code = connection.responseCode
         if (code !in 200..299) {
             connection.disconnect()
-            throw IOException(
+            throw DownloadHttpException(
+                code,
                 if (code == 403 || code == 429) {
                     "GitHub is limiting requests from this network (HTTP $code); try again in a few minutes"
                 } else {
@@ -149,7 +182,12 @@ class ReleaseDownloader(private val directory: File) {
         return connection
     }
 
+    private class DownloadHttpException(val status: Int, message: String) : IOException(message)
+
     companion object {
+        const val MAX_DOWNLOAD_ATTEMPTS = 3
+        const val RETRY_DELAY_MS = 500L
+
         /**
          * Picks the build of [source] from GitHub's release list, newest
          * first. [includeNightly] takes the most recently uploaded file of

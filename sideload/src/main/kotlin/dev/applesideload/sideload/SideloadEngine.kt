@@ -188,7 +188,13 @@ class SideloadEngine(
             IpaPackage.pack(work, signedIpa)
 
             val staged = upload(device, signedIpa, onStep)
-            installStaged(device, staged, onStep)
+            try {
+                installStaged(device, staged, onStep)
+            } finally {
+                // A failed verification/install must not leave the exact IPA
+                // behind until the next install attempt sweeps PublicStaging.
+                removeStaged(device, staged)
+            }
             signedIpa.delete()
 
             val handedOff = if (special == SpecialApp.SIDESTORE || special == SpecialApp.SIDESTORE_LIVECONTAINER) {
@@ -387,14 +393,19 @@ class SideloadEngine(
             }
             val total = signedIpa.length()
             var last = -1
-            signedIpa.inputStream().use { source ->
-                afc.writeFile("$STAGING/$stagedName", source, total) { written ->
-                    val percent = if (total > 0) ((written * 100) / total).toInt() else 0
-                    if (percent != last) {
-                        last = percent
-                        onStep(SideloadStep.Uploading(percent.coerceIn(0, 100)))
+            try {
+                signedIpa.inputStream().use { source ->
+                    afc.writeFile("$STAGING/$stagedName", source, total) { written ->
+                        val percent = if (total > 0) ((written * 100) / total).toInt() else 0
+                        if (percent != last) {
+                            last = percent
+                            onStep(SideloadStep.Uploading(percent.coerceIn(0, 100)))
+                        }
                     }
                 }
+            } catch (error: Exception) {
+                runCatching { afc.removeTree("$STAGING/$stagedName") }
+                throw error
             }
         }
         return stagedName
@@ -409,7 +420,11 @@ class SideloadEngine(
                 onStep(SideloadStep.Installing(progress.percent, progress.status))
             }
         }
+    }
+
+    private fun removeStaged(device: DeviceSession, fileName: String) {
         runCatching { device.afc().use { it.removePath("$STAGING/$fileName") } }
+            .onFailure { Log.w(LogTag.INSTALL, "could not remove staged IPA $fileName: ${it.message}") }
     }
 
     /**

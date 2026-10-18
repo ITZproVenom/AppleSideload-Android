@@ -10,13 +10,114 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class ReleaseSourcesTest {
     @get:Rule
     val folder = TemporaryFolder()
+
+    private class FakeDownloadConnection(
+        url: URL,
+        private val bytes: ByteArray,
+        private val failAfter: Int? = null,
+        private val status: Int = 200
+    ) : HttpURLConnection(url) {
+        override fun connect() = Unit
+        override fun disconnect() = Unit
+        override fun usingProxy() = false
+        override fun getResponseCode() = status
+        override fun getContentLengthLong() = bytes.size.toLong()
+        override fun getInputStream(): InputStream = object : InputStream() {
+            private var position = 0
+            override fun read(): Int {
+                if (failAfter != null && position >= failAfter) throw IOException("simulated connection reset")
+                return if (position >= bytes.size) -1 else bytes[position++].toInt() and 0xff
+            }
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                if (failAfter != null && position >= failAfter) throw IOException("simulated connection reset")
+                if (position >= bytes.size) return -1
+                val count = minOf(length, bytes.size - position, failAfter?.minus(position) ?: Int.MAX_VALUE)
+                bytes.copyInto(buffer, offset, position, position + count)
+                position += count
+                return count
+            }
+        }
+    }
+
+    @Test
+    fun aNonRetryableNotFoundDoesNotRepeatAndLeavesNoPartial() {
+        val requests = AtomicInteger()
+        val directory = folder.newFolder("not-found")
+        val downloader = ReleaseDownloader(
+            directory,
+            connectionFactory = { url ->
+                requests.incrementAndGet()
+                FakeDownloadConnection(URL(url), byteArrayOf(), status = 404)
+            },
+            retryDelay = {}
+        )
+        val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/missing.ipa", 10)
+        try {
+            downloader.download(build) {}
+            throw AssertionError("expected 404")
+        } catch (error: IOException) {
+            assertTrue(error.message.orEmpty().contains("HTTP 404"))
+        }
+        assertEquals(1, requests.get())
+        val partials = directory.walkTopDown().filter { it.name.endsWith(".part") }.toList()
+        assertTrue(partials.isEmpty())
+    }
+
+    @Test
+    fun retriesAConnectionResetAndKeepsOnlyTheCompleteIPA() {
+        val expected = "complete ipa payload".toByteArray()
+        val requests = AtomicInteger()
+        val downloader = ReleaseDownloader(
+            folder.newFolder("downloads"),
+            connectionFactory = { url ->
+                if (requests.incrementAndGet() == 1) FakeDownloadConnection(URL(url), expected, failAfter = 5)
+                else FakeDownloadConnection(URL(url), expected)
+            },
+            retryDelay = {}
+        )
+        val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/app.ipa", expected.size.toLong())
+
+        val file = downloader.download(build) {}
+
+        assertEquals(2, requests.get())
+        assertTrue(expected.contentEquals(file.readBytes()))
+        assertFalse(File(file.parentFile, file.name + ".part").exists())
+    }
+
+    @Test
+    fun failedRetriesDoNotLeavePartialIPA() {
+        val expected = "incomplete ipa payload".toByteArray()
+        val requests = AtomicInteger()
+        val directory = folder.newFolder("exhausted")
+        val downloader = ReleaseDownloader(
+            directory,
+            connectionFactory = { url ->
+                requests.incrementAndGet()
+                FakeDownloadConnection(URL(url), expected, failAfter = 5)
+            },
+            retryDelay = {}
+        )
+        val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/app.ipa", expected.size.toLong())
+        try {
+            downloader.download(build) {}
+            throw AssertionError("expected interrupted download")
+        } catch (error: IOException) {
+            assertTrue(error.message.orEmpty().contains("simulated connection reset"))
+        }
+        assertEquals(ReleaseDownloader.MAX_DOWNLOAD_ATTEMPTS, requests.get())
+        assertTrue(directory.listFiles().orEmpty().none { it.name.endsWith(".part") })
+    }
 
     /** GitHub's release lists as they were in September 2026, trimmed. */
     private val sideStore = JSONArray(
