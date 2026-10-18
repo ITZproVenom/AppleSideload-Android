@@ -78,7 +78,6 @@ object AnisetteServers {
     enum class ClientKind { WINDOWS, MAC }
 
     private val windowsAdiHosts = setOf("ani.jkcoxson.com", "win.ani.sidestore.io", "ani2.stikstore.app")
-    private val macAdiHosts = setOf("mac-ani.jkcoxson.com", "new.ani.sidestore.io")
     private val stockClientPrefixes = listOf(
         "<MacBookPro13,2> <macOS;13.1;22C65>",
         "<MacBookPro15,1> <Mac OS X;10.15.2;19C57>"
@@ -104,6 +103,7 @@ object AnisetteServers {
         return when {
             "<Windows;" in info -> Library.WINDOWS
             info.contains("<MacBookPro13,3>") || info.contains("<Mac OS X;10.12.6;") -> Library.MAC
+            info.contains("<Android;") || stockClientPrefixes.any { info.startsWith(it) } -> Library.ANDROID
             else -> Library.ANDROID
         }
     }
@@ -430,14 +430,20 @@ class RemoteAnisetteProvider(
     private fun selectedClientProfile(): ClientProfile {
         if (useAndroidClientInfo) return ClientProfile(ANDROID_CLIENT_INFO, ANDROID_USER_AGENT)
         val advertised = sourceInfo
-        return when (AnisetteServers.libraryOf(base, advertised?.clientInfo, servers)) {
+        val serverInfo = advertised?.clientInfo.orEmpty()
+        val serverUa = advertised?.userAgent.orEmpty()
+        val stock = stockClientPrefixes.any { serverInfo.trim().startsWith(it) }
+        if (serverInfo.contains("<Android;") || stock) {
+            return ClientProfile(WINDOWS_CLIENT_INFO, WINDOWS_USER_AGENT)
+        }
+        return when (AnisetteServers.libraryOf(base, serverInfo, servers)) {
             AnisetteServers.Library.MAC -> ClientProfile(
-                advertised?.clientInfo?.takeIf { it.isNotBlank() } ?: MAC_SERVER_CLIENT_INFO,
-                advertised?.userAgent?.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
+                serverInfo.takeIf { it.isNotBlank() } ?: MAC_SERVER_CLIENT_INFO,
+                serverUa.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
             )
             AnisetteServers.Library.WINDOWS -> ClientProfile(
-                advertised?.clientInfo?.takeIf { it.contains("<Windows;", ignoreCase = true) } ?: WINDOWS_CLIENT_INFO,
-                advertised?.userAgent?.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
+                serverInfo.takeIf { it.contains("<Windows;", ignoreCase = true) } ?: WINDOWS_CLIENT_INFO,
+                serverUa.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
             )
             AnisetteServers.Library.ANDROID -> ClientProfile(WINDOWS_CLIENT_INFO, WINDOWS_USER_AGENT)
         }
