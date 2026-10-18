@@ -8,6 +8,8 @@ import dev.applesideload.app.TwoFactorPrompt
 import dev.applesideload.app.UiState
 import dev.applesideload.app.web.LanAddress
 import dev.applesideload.app.web.WebStatus
+import dev.applesideload.apple.AnisetteData
+import dev.applesideload.apple.AnisetteProvider
 import dev.applesideload.apple.AppleSession
 import dev.applesideload.apple.DeveloperTeam
 import dev.applesideload.apple.PendingAuth
@@ -110,7 +112,13 @@ object Fixtures {
     private fun pendingAuth(): PendingAuth {
         val constructor = PendingAuth::class.java.declaredConstructors.single()
         constructor.isAccessible = true
-        return constructor.newInstance("alex@example.com", "adsid", "token", "") as PendingAuth
+        val provider = object : AnisetteProvider {
+            override val name = "screenshot fixture"
+            override val serverAddress = "https://ani.jkcoxson.com"
+            override fun isAvailable() = true
+            override fun fetch() = AnisetteData("otp", "machine", "17106176", "device")
+        }
+        return constructor.newInstance("alex@example.com", "adsid", "token", "", provider) as PendingAuth
     }
 
     val twoFactor = UiState(twoFactor = TwoFactorPrompt(pendingAuth()))
@@ -148,7 +156,7 @@ object Fixtures {
 
     val settings = SettingsSnapshot(
         anisetteAddress = "",
-        effectiveAnisetteAddress = "https://ani.sidestore.io",
+        effectiveAnisetteAddress = "https://ani.jkcoxson.com",
         wifiDiscovery = true,
         lastAppleId = "alex@example.com",
         lastWirelessAddress = "192.168.1.23"

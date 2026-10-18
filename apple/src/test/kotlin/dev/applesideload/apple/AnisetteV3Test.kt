@@ -131,6 +131,8 @@ class AnisetteV3Test {
 
         @Volatile var v3 = true
         @Volatile var clientInfoStatus = 200
+        @Volatile var advertisedClientInfo = "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>"
+        @Volatile var advertisedUserAgent = "akd/1.0 CFNetwork/808.1.4"
         @Volatile var refuseEverything = false
 
         /** The provisioning data each identifier was given. */
@@ -204,8 +206,8 @@ class AnisetteV3Test {
                 !v3 -> 404 to "Not Found"
                 clientInfoStatus != 200 -> clientInfoStatus to "busy"
                 else -> 200 to JSONObject()
-                    .put("client_info", "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>")
-                    .put("user_agent", "akd/1.0 CFNetwork/808.1.4")
+                    .put("client_info", advertisedClientInfo)
+                    .put("user_agent", advertisedUserAgent)
                     .toString()
             }
             "POST /v3/get_headers" -> {
@@ -320,13 +322,15 @@ class AnisetteV3Test {
         source: FakeSource,
         apple: FakeAppleProvisioning,
         store: AnisetteStore,
-        useAndroidClientInfo: Boolean = false
+        useAndroidClientInfo: Boolean = false,
+        storeForLibrary: ((AnisetteServers.Library) -> AnisetteStore)? = null
     ) = RemoteAnisetteProvider(
         baseUrl = source.base,
         http = Http(timeoutMs = 10_000),
         store = store,
         grandSlam = GrandSlam(Http(timeoutMs = 10_000), bagUrl = "${apple.base}/lookup", retryDelaysMs = listOf(1, 1)),
-        useAndroidClientInfo = useAndroidClientInfo
+        useAndroidClientInfo = useAndroidClientInfo,
+        storeForLibrary = storeForLibrary
     )
 
     private fun lowerUuid(identifier: ByteArray): String = ByteBuffer.wrap(identifier).let { UUID(it.long, it.long) }.toString()
@@ -336,6 +340,92 @@ class AnisetteV3Test {
 
     private fun both(block: (FakeSource, FakeAppleProvisioning) -> Unit) =
         FakeSource().use { source -> FakeAppleProvisioning().use { apple -> block(source, apple) } }
+
+    @Test
+    fun serverLibraryClassifierAndCandidateOrderKeepPlatformGroupsTogether() {
+        val servers = listOf(
+            AnisetteServers.Server("SideStore", "https://ani.sidestore.io"),
+            AnisetteServers.Server("Windows ADI", "https://ani.jkcoxson.com"),
+            AnisetteServers.Server("Mac ADI", "https://mac-ani.jkcoxson.com"),
+            AnisetteServers.Server("StikStore Windows ADI", "https://ani2.stikstore.app")
+        )
+        assertEquals(AnisetteServers.Library.ANDROID, AnisetteServers.libraryOf("https://ani.sidestore.io", servers))
+        assertEquals(AnisetteServers.Library.WINDOWS, AnisetteServers.libraryOf("https://ani.jkcoxson.com", servers))
+        assertEquals(AnisetteServers.Library.MAC, AnisetteServers.libraryOf("https://mac-ani.jkcoxson.com", servers))
+        assertEquals(
+            listOf("https://ani.sidestore.io", "https://ani.jkcoxson.com", "https://ani2.stikstore.app", "https://mac-ani.jkcoxson.com"),
+            AnisetteServers.candidates("https://ani.sidestore.io", servers)
+        )
+        assertEquals(
+            listOf("https://mac-ani.jkcoxson.com", "https://ani.jkcoxson.com", "https://ani2.stikstore.app", "https://ani.sidestore.io"),
+            AnisetteServers.candidates("https://mac-ani.jkcoxson.com", servers)
+        )
+    }
+
+    @Test
+    fun sixAttemptFallbackKeepsMacAsFinalCandidate() {
+        val servers = buildList {
+            add(AnisetteServers.Server("Windows pick", "https://ani.jkcoxson.com"))
+            repeat(10) { add(AnisetteServers.Server("Android $it", "https://android$it.example.test")) }
+            add(AnisetteServers.Server("Known Mac", "https://mac-ani.jkcoxson.com"))
+        }
+        val candidates = AnisetteServers.candidates("https://ani.jkcoxson.com", servers, maxTries = 6)
+        assertEquals(6, candidates.size)
+        assertEquals("https://mac-ani.jkcoxson.com", candidates.last())
+        assertEquals(AnisetteServers.Library.MAC, AnisetteServers.libraryOf(candidates.last(), servers))
+    }
+
+    @Test
+    fun libraryProfilesAndFallbackOrderMatchSideInstaller153() {
+        val servers = listOf(
+            AnisetteServers.Server("Android ADI", "https://ani.sidestore.io"),
+            AnisetteServers.Server("Windows ADI", "https://ani.jkcoxson.com"),
+            AnisetteServers.Server("Mac ADI", "https://mac-ani.jkcoxson.com")
+        )
+        assertEquals(AnisetteServers.Library.ANDROID, AnisetteServers.libraryOf("https://ani.sidestore.io", servers))
+        assertEquals(AnisetteServers.Library.WINDOWS, AnisetteServers.libraryOf("https://ani.jkcoxson.com", servers))
+        assertEquals(AnisetteServers.Library.MAC, AnisetteServers.libraryOf("https://mac-ani.jkcoxson.com", servers))
+        assertEquals(
+            listOf("https://ani.sidestore.io", "https://ani.jkcoxson.com", "https://mac-ani.jkcoxson.com"),
+            AnisetteServers.candidates("https://ani.sidestore.io", servers)
+        )
+    }
+
+    @Test
+    fun macAdiServerProfileIsUsedInsteadOfWindowsFallback() = both { source, apple ->
+        source.advertisedClientInfo = "<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        val data = provider(source, apple, MemoryAnisetteStore()).fetch()
+        assertEquals(source.advertisedClientInfo, data.clientInfo)
+        assertEquals(source.advertisedUserAgent, data.userAgent)
+        assertTrue(apple.requests.filter { it.path == "/midStart" || it.path == "/midFinish" }
+            .all { it.headers["x-mme-client-info"] == source.advertisedClientInfo })
+    }
+
+    @Test
+    fun identitiesStaySeparateWhenServerChangesAdiLibrary() = both { source, apple ->
+        val stores = mutableMapOf<AnisetteServers.Library, MemoryAnisetteStore>()
+        val storeFactory: (AnisetteServers.Library) -> AnisetteStore = { library ->
+            stores.getOrPut(library) { MemoryAnisetteStore() }
+        }
+        fun providerForProfile() = RemoteAnisetteProvider(
+            baseUrl = source.base,
+            http = Http(timeoutMs = 10_000),
+            storeForLibrary = storeFactory,
+            grandSlam = GrandSlam(Http(timeoutMs = 10_000), bagUrl = "${apple.base}/lookup")
+        )
+
+        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        val windows = providerForProfile().fetch()
+        source.advertisedClientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        val android = providerForProfile().fetch()
+        source.advertisedClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
+        val windowsAgain = providerForProfile().fetch()
+
+        assertNotEquals(windows.deviceId, android.deviceId)
+        assertEquals(windows.deviceId, windowsAgain.deviceId)
+        assertEquals("each ADI library provisions only its own identity", 2, source.sessions.get())
+        assertEquals(2, stores.size)
+    }
 
     @Test
     fun legacyAndroidProfileMatchesItsAnisetteDataOnProvisioningRequests() = both { source, apple ->

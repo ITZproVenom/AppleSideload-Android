@@ -16,17 +16,12 @@ notes of the next release.
 - The password proof (SRP) had three calculation errors, so Apple would have
   refused even the right password. It now matches the reference
   implementation, checked against values computed with it.
-- The app sets up its own device identity with the configured anisette server
-  (anisette v3) and keeps it on the phone. Apple sees the same identity on
-  later sign-ins. The default client profile is now Windows/iTunes, matching
-  SideInstaller 1.5.2; if a Windows-ADI server requests hsc 434, the app sends
-  its resync payload back to that same anisette server and retries the initial
-  sign-in once. No computer or extra anisette-generating device is required.
-  The older Android client profile remains an optional compatibility setting.
-- Apple refuses second-factor endpoints when they identify as Android, so
-  trusted-device and phone-code requests use the Mac client profile, matching
-  SideInstaller 1.5.1. SMS verification can use a trusted phone number; no
-  extra computer or anisette-generating device is required.
+- The app classifies anisette sources as Android, Windows or Mac ADI, keeps a
+  separate identity for each library, and prefers the last successful server.
+  If Apple refuses a client profile or a server rejects an identity, sign-in
+  fails over to another compatible server without discarding other identities.
+  New installs prefer Windows ADI; existing installs keep their prior server.
+  Bare 403s from OTP endpoints retry once as Mac.
 - The token for Apple's developer service is requested and decrypted the way
   Apple sends it now.
 - When Apple is busy (*429 Too Many Requests*), the app waits and tries twice

@@ -74,23 +74,90 @@ object AnisetteServers {
 
     data class Server(val name: String, val address: String)
 
-    /** Used on first launch and whenever the live list cannot be fetched. */
+    enum class Library { ANDROID, WINDOWS, MAC }
+    enum class ClientKind { WINDOWS, MAC }
+
+    private val windowsAdiHosts = setOf("ani.jkcoxson.com", "win.ani.sidestore.io", "ani2.stikstore.app")
+    private val macAdiHosts = setOf("mac-ani.jkcoxson.com", "new.ani.sidestore.io")
+    private val stockClientPrefixes = listOf(
+        "<MacBookPro13,2> <macOS;13.1;22C65>",
+        "<MacBookPro15,1> <Mac OS X;10.15.2;19C57>"
+    )
+
+    fun isStockClientInfo(info: String): Boolean = stockClientPrefixes.any { info.trim().startsWith(it) }
+
+    fun libraryOf(address: String, servers: List<Server> = bundled): Library {
+        val key = normalize(address)
+        val host = runCatching { java.net.URI(key).host?.lowercase() }.getOrNull()
+        if (host in macAdiHosts) return Library.MAC
+        if (host in windowsAdiHosts) return Library.WINDOWS
+        val displayName = servers.firstOrNull { normalize(it.address) == key }?.name.orEmpty().lowercase()
+        return when {
+            "mac adi" in displayName -> Library.MAC
+            "windows" in displayName -> Library.WINDOWS
+            else -> Library.ANDROID
+        }
+    }
+
+    fun libraryOf(address: String, advertisedClientInfo: String?, servers: List<Server> = bundled): Library {
+        val known = libraryOf(address, servers)
+        if (known != Library.ANDROID) return known
+        val info = advertisedClientInfo.orEmpty()
+        return when {
+            "<Windows;" in info -> Library.WINDOWS
+            info.contains("<MacBookPro13,3>") || info.contains("<Mac OS X;10.12.6;") -> Library.MAC
+            info.contains("<Android;") || stockClientPrefixes.any { info.startsWith(it) } -> Library.ANDROID
+            else -> Library.ANDROID
+        }
+    }
+
+    fun clientKind(address: String, servers: List<Server> = bundled): ClientKind =
+        if (libraryOf(address, servers) == Library.MAC) ClientKind.MAC else ClientKind.WINDOWS
+
+    fun candidates(pick: String, servers: List<Server>, maxTries: Int? = null): List<String> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<String>()
+        fun add(address: String) {
+            val trimmed = address.trim().trimEnd('/')
+            if (trimmed.isNotBlank() && seen.add(normalize(trimmed))) out += trimmed
+        }
+        val all = (listOf(Server("selected", pick)) + servers).distinctBy { normalize(it.address) }
+        val pickLibrary = libraryOf(pick, all)
+        add(pick)
+        if (pickLibrary != Library.ANDROID) all.filter { libraryOf(it.address, all) == pickLibrary }.forEach { add(it.address) }
+        all.filter { libraryOf(it.address, all) == Library.WINDOWS }.forEach { add(it.address) }
+        all.filter { libraryOf(it.address, all) == Library.ANDROID }.forEach { add(it.address) }
+        all.filter { libraryOf(it.address, all) == Library.MAC }.forEach { add(it.address) }
+        val limit = maxTries ?: return out
+        if (out.size <= limit) return out
+        val bounded = out.take(limit).toMutableList()
+        val mac = out.firstOrNull { libraryOf(it, all) == Library.MAC }
+        if (mac != null && bounded.none { libraryOf(it, all) == Library.MAC }) bounded[bounded.lastIndex] = mac
+        return bounded.distinctBy(::normalize)
+    }
+
+    private fun normalize(address: String): String = address.trim().trimEnd('/').lowercase()
+
     val bundled: List<Server> = listOf(
+        Server("jkcoxson (Windows ADI)", "https://ani.jkcoxson.com"),
+        Server("SideStore (Windows ADI)", "https://win.ani.sidestore.io"),
+        Server("StikStore (Windows ADI)", "https://ani2.stikstore.app"),
         Server("SideStore", "https://ani.sidestore.io"),
         Server("SideStore (.app)", "https://ani.sidestore.app"),
         Server("SideStore (.zip)", "https://ani.sidestore.zip"),
         Server("SideStore (.xyz)", "https://ani.846969.xyz"),
+        Server("SideStore (New)", "https://new.ani.sidestore.io"),
+        Server("jkcoxson (Mac ADI)", "https://mac-ani.jkcoxson.com"),
         Server("nythepegasus", "https://ani.npeg.us"),
         Server("WE. Studio", "https://anisette.wedotstud.io"),
         Server("SteX", "https://ani.xu30.top"),
         Server("iDH Server", "https://ani.idevicehacked.com"),
         Server("neoarz", "https://ani.neoarz.com"),
-        Server("crystall1nedev", "https://anisette.crystall1ne.dev"),
-        Server("SideStore (Windows ADI)", "https://win.ani.sidestore.io"),
-        Server("jkcoxson (Windows ADI)", "https://ani.jkcoxson.com")
+        Server("crystall1nedev", "https://anisette.crystall1ne.dev")
     )
 
     val default: Server get() = bundled.first()
+    val legacyDefault: Server get() = bundled.first { it.address == "https://ani.sidestore.io" }
 
     /** Fetches the published list, falling back to [bundled] on any failure. */
     fun fetchList(http: Http = Http()): List<Server> = runCatching {
@@ -105,13 +172,16 @@ object AnisetteServers {
                     add(Server(entry.optString("name", address), address.trimEnd('/')))
                 }
             }
-        }.ifEmpty { bundled }
+        }.ifEmpty { bundled }.let { live ->
+            (live + bundled.filter { libraryOf(it.address) != Library.ANDROID }).distinctBy { normalize(it.address) }
+        }
     }.getOrDefault(bundled)
 }
 
 /** Where anisette data comes from. */
 interface AnisetteProvider {
     val name: String
+    val serverAddress: String get() = ""
 
     /** True when this source can actually produce data right now. */
     fun isAvailable(): Boolean
@@ -300,14 +370,24 @@ class RemoteAnisetteProvider(
     private val store: AnisetteStore = MemoryAnisetteStore(),
     private val grandSlam: GrandSlam = GrandSlam(http),
     /** Use SideInstaller's Android client identity with v3 anisette tokens. */
-    private val useAndroidClientInfo: Boolean = false
+    private val useAndroidClientInfo: Boolean = false,
+    private val servers: List<AnisetteServers.Server> = AnisetteServers.bundled,
+    private val storeForLibrary: ((AnisetteServers.Library) -> AnisetteStore)? = null
 ) : AnisetteProvider {
 
     override val name: String = "anisette source at $baseUrl"
+    override val serverAddress: String get() = base
 
     override fun isAvailable(): Boolean = baseUrl.isNotBlank()
 
     private val base: String get() = baseUrl.trim().trimEnd('/')
+
+    private val activeStore: AnisetteStore
+        get() {
+            val factory = storeForLibrary ?: return store
+            val library = AnisetteServers.libraryOf(base, sourceInfo?.clientInfo, servers)
+            return factory(library)
+        }
 
     override fun fetch(): AnisetteData {
         if (baseUrl.isBlank()) {
@@ -353,10 +433,32 @@ class RemoteAnisetteProvider(
         } else SourceInfo(clientInfo, json?.optString("user_agent").orEmpty())
     }
 
-    private fun selectedClientHeaders(): Map<String, String> = if (useAndroidClientInfo) {
-        mapOf("X-Mme-Client-Info" to ANDROID_CLIENT_INFO, "User-Agent" to ANDROID_USER_AGENT)
-    } else {
-        mapOf("X-Mme-Client-Info" to WINDOWS_CLIENT_INFO, "User-Agent" to WINDOWS_USER_AGENT)
+    private data class ClientProfile(val info: String, val userAgent: String)
+
+    private fun selectedClientProfile(): ClientProfile {
+        if (useAndroidClientInfo) return ClientProfile(ANDROID_CLIENT_INFO, ANDROID_USER_AGENT)
+        val advertised = sourceInfo
+        val serverInfo = advertised?.clientInfo.orEmpty()
+        val serverUa = advertised?.userAgent.orEmpty()
+        val stock = AnisetteServers.isStockClientInfo(serverInfo)
+        if (serverInfo.contains("<Android;") || stock) {
+            return ClientProfile(WINDOWS_CLIENT_INFO, WINDOWS_USER_AGENT)
+        }
+        return when (AnisetteServers.libraryOf(base, serverInfo, servers)) {
+            AnisetteServers.Library.MAC -> ClientProfile(
+                serverInfo.takeIf { it.isNotBlank() } ?: MAC_SERVER_CLIENT_INFO,
+                serverUa.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
+            )
+            AnisetteServers.Library.WINDOWS -> ClientProfile(
+                serverInfo.takeIf { it.contains("<Windows;", ignoreCase = true) } ?: WINDOWS_CLIENT_INFO,
+                serverUa.takeIf { it.isNotBlank() } ?: WINDOWS_USER_AGENT
+            )
+            AnisetteServers.Library.ANDROID -> ClientProfile(WINDOWS_CLIENT_INFO, WINDOWS_USER_AGENT)
+        }
+    }
+
+    private fun selectedClientHeaders(): Map<String, String> = selectedClientProfile().let {
+        mapOf("X-Mme-Client-Info" to it.info, "User-Agent" to it.userAgent)
     }
 
     override fun resync(sim: String): AnisetteData = synchronized(LOCK) {
@@ -367,7 +469,7 @@ class RemoteAnisetteProvider(
                 alternative = "choose an anisette v3 server"
             )
         }
-        val identity = store.load() ?: throw AnisetteUnavailable(
+        val identity = activeStore.load() ?: throw AnisetteUnavailable(
             detail = "there is no provisioned identity to resync",
             limitation = "Apple's resync payload applies to an existing anisette v3 identity",
             alternative = "retry sign-in to provision an identity"
@@ -380,7 +482,7 @@ class RemoteAnisetteProvider(
                 alternative = "try another v3 anisette server"
             )
             is HeadersReply.Headers -> anisetteData(identity, data).also {
-                CACHE["$base|$useAndroidClientInfo"] = Cached(it, System.nanoTime())
+                CACHE[cacheKey(identity)] = Cached(it, System.nanoTime())
                 Log.i(LogTag.APPLE, "the anisette source applied Apple's identity resync")
             }
         }
@@ -388,8 +490,9 @@ class RemoteAnisetteProvider(
 
     private fun fetchV3(): AnisetteData = synchronized(LOCK) {
         val clientHeaders = selectedClientHeaders()
-        var identity = store.load() ?: provision(clientHeaders)
-        val cacheKey = "$base|$useAndroidClientInfo"
+        val identityStore = activeStore
+        var identity = identityStore.load() ?: provision(clientHeaders)
+        val cacheKey = cacheKey(identity)
         CACHE[cacheKey]?.let { cached ->
             if (cached.data.deviceId == identity.deviceId && System.nanoTime() - cached.madeAt < CACHE_NANOS) {
                 return cached.data
@@ -400,7 +503,7 @@ class RemoteAnisetteProvider(
             // Usually provisioning data the source can no longer use; a new
             // identity fixes that, at the price of one more two factor code.
             Log.w(LogTag.APPLE, "the anisette source refused this phone's identity (${reply.message}); making a new one")
-            store.clear()
+            identityStore.clear()
             identity = provision(clientHeaders)
             reply = headersFor(identity)
         }
@@ -417,14 +520,18 @@ class RemoteAnisetteProvider(
         }
     }
 
-    private fun anisetteData(identity: AnisetteIdentity, reply: HeadersReply.Headers) = AnisetteData(
-        oneTimePassword = reply.oneTimePassword,
-        machineId = reply.machineId,
-        routingInfo = reply.routingInfo,
-        deviceId = identity.deviceId,
-        clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else WINDOWS_CLIENT_INFO,
-        userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else WINDOWS_USER_AGENT
-    )
+    private fun cacheKey(identity: AnisetteIdentity): String = "$base|${selectedClientProfile().info}|${identity.deviceId}"
+
+    private fun anisetteData(identity: AnisetteIdentity, reply: HeadersReply.Headers) = selectedClientProfile().let { profile ->
+        AnisetteData(
+            oneTimePassword = reply.oneTimePassword,
+            machineId = reply.machineId,
+            routingInfo = reply.routingInfo,
+            deviceId = identity.deviceId,
+            clientInfo = profile.info,
+            userAgent = profile.userAgent
+        )
+    }
 
     private sealed class HeadersReply {
         class Headers(val oneTimePassword: String, val machineId: String, val routingInfo: String) : HeadersReply()
@@ -557,7 +664,7 @@ class RemoteAnisetteProvider(
                         throw provisioningFailed("the source reported success without the provisioning data")
                     }
                     val identity = AnisetteIdentity(identifier, adiPb)
-                    store.save(identity)
+                    activeStore.save(identity)
                     Log.i(LogTag.APPLE, "this phone's attestation identity is set up")
                     return identity
                 }
@@ -656,8 +763,8 @@ class RemoteAnisetteProvider(
             routingInfo = field("X-Apple-I-MD-RINFO", "routing_info") ?: "17106176",
             deviceId = field("X-Mme-Device-Id", "device_id") ?: deviceId,
             extraHeaders = extras,
-            clientInfo = if (useAndroidClientInfo) ANDROID_CLIENT_INFO else WINDOWS_CLIENT_INFO,
-            userAgent = if (useAndroidClientInfo) ANDROID_USER_AGENT else WINDOWS_USER_AGENT
+            clientInfo = selectedClientProfile().info,
+            userAgent = selectedClientProfile().userAgent
         )
     }
 
@@ -670,6 +777,7 @@ class RemoteAnisetteProvider(
         /** SideInstaller v1.5.2: Windows/iTunes works with current Android and Windows ADI servers. */
         const val WINDOWS_CLIENT_INFO = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
         const val WINDOWS_USER_AGENT = "akd/1.0 CFNetwork/808.1.4"
+        const val MAC_SERVER_CLIENT_INFO = "<MacBookPro13,3> <Mac OS X;10.12.6;16G29>"
 
         /** Earlier Android profile retained only as a troubleshooting fallback. */
         const val ANDROID_CLIENT_INFO = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"

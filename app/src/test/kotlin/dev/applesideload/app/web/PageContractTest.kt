@@ -4,6 +4,7 @@ import dev.applesideload.app.Action
 import dev.applesideload.app.Controls
 import dev.applesideload.app.SettingsSnapshot
 import dev.applesideload.app.UiState
+import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.core.LogLine
 import dev.applesideload.sideload.InstallSource
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +24,7 @@ class PageContractTest {
         controls = object : Controls {
             override val state: StateFlow<UiState> = MutableStateFlow(UiState())
             override val logs: StateFlow<List<LogLine>> = MutableStateFlow(emptyList())
-            override fun settingsSnapshot() = SettingsSnapshot("", "https://ani.sidestore.io", true, "", "")
+            override fun settingsSnapshot() = SettingsSnapshot("", AnisetteServers.default.address, true, "", "")
             override fun dismissMessages() = Unit
             override fun refreshDevices() = Unit
             override fun connectById(id: String) = Action.Started
