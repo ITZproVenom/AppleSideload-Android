@@ -83,6 +83,8 @@ object AnisetteServers {
         "<MacBookPro15,1> <Mac OS X;10.15.2;19C57>"
     )
 
+    fun isStockClientInfo(info: String): Boolean = stockClientPrefixes.any { info.trim().startsWith(it) }
+
     fun libraryOf(address: String, servers: List<Server> = bundled): Library {
         val key = normalize(address)
         val host = runCatching { java.net.URI(key).host?.lowercase() }.getOrNull()
@@ -432,7 +434,7 @@ class RemoteAnisetteProvider(
         val advertised = sourceInfo
         val serverInfo = advertised?.clientInfo.orEmpty()
         val serverUa = advertised?.userAgent.orEmpty()
-        val stock = stockClientPrefixes.any { serverInfo.trim().startsWith(it) }
+        val stock = AnisetteServers.isStockClientInfo(serverInfo)
         if (serverInfo.contains("<Android;") || stock) {
             return ClientProfile(WINDOWS_CLIENT_INFO, WINDOWS_USER_AGENT)
         }
