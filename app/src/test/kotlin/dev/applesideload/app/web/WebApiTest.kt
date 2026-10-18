@@ -6,6 +6,7 @@ import dev.applesideload.app.RemoteDeviceSummary
 import dev.applesideload.app.RemotePairingPrompt
 import dev.applesideload.app.SettingsSnapshot
 import dev.applesideload.app.UiState
+import dev.applesideload.apple.AnisetteServers
 import dev.applesideload.apple.AppleSession
 import dev.applesideload.apple.DeveloperTeam
 import dev.applesideload.core.LogLevel
@@ -48,7 +49,14 @@ private class RecordingControls : Controls {
 
     override val state: StateFlow<UiState> get() = mutableState
     override val logs: StateFlow<List<LogLine>> get() = mutableLogs
-    override fun settingsSnapshot() = SettingsSnapshot(anisette, anisette.ifBlank { "https://ani.sidestore.io" }, wifi, "me@example.com", "192.168.1.9", androidProfile)
+    override fun settingsSnapshot() = SettingsSnapshot(
+        anisette,
+        anisette.ifBlank { AnisetteServers.default.address },
+        wifi,
+        "me@example.com",
+        "192.168.1.9",
+        androidProfile
+    )
 
     private fun record(call: String): Action {
         calls += call
