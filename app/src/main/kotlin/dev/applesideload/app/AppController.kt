@@ -877,7 +877,11 @@ class AppController(private val app: SideloadApplication) : Controls {
         return run("Signing in to Apple") {
             app.settings.lastAppleId = appleId.trim()
             set { it.copy(twoFactor = null, settingsRevision = it.settingsRevision + 1) }
-            val candidates = AnisetteServers.candidates(app.settings.effectiveAnisetteAddress, _state.value.anisetteServers).take(6)
+            val candidates = AnisetteServers.candidates(
+                app.settings.effectiveAnisetteAddress,
+                _state.value.anisetteServers,
+                maxTries = 6
+            )
             val refusals = mutableMapOf<AnisetteServers.ClientKind, Int>()
             var lastError: Exception? = null
             var selected: Pair<AppleAuth, AuthResult>? = null
@@ -895,7 +899,8 @@ class AppController(private val app: SideloadApplication) : Controls {
                     if (error is kotlinx.coroutines.CancellationException) throw error
                     lastError = error
                     val authError = error as? AppleAuthException
-                    if (authError?.code == 429 || authError?.code == -20101 || authError?.code == -20970) throw error
+                    val retryable = error is AnisetteUnavailable || authError?.code?.let { it == 503 || it == -80045 || it == -22406 } == true
+                    if (!retryable) throw error
                     if (authError?.code == 503 || authError?.code == -80045) {
                         refusals[kind] = (refusals[kind] ?: 0) + 1
                     }
