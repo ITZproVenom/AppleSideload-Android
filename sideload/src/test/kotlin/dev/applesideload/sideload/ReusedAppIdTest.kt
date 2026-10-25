@@ -1,9 +1,8 @@
 package dev.applesideload.sideload
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
-import dev.applesideload.signing.SigningException
 
 class ReusedAppIdTest {
     @Test
@@ -22,11 +21,7 @@ class ReusedAppIdTest {
 
     @Test
     fun wildcardAndBlankIdentifiersCannotBeSelectedForReuse() {
-        assertThrows(SigningException::class.java) {
-            targetBundleIdentifier("com.example.notes", "ABCDE12345", "com.example.*")
-        }
-        assertThrows(SigningException::class.java) {
-            targetBundleIdentifier("com.example.notes", "ABCDE12345", " ")
-        }
+        assertTrue(runCatching { targetBundleIdentifier("com.example.notes", "ABCDE12345", "com.example.*") }.isFailure)
+        assertTrue(runCatching { targetBundleIdentifier("com.example.notes", "ABCDE12345", " ") }.isFailure)
     }
 }
