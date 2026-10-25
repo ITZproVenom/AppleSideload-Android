@@ -34,6 +34,28 @@ class ProvisioningProfile(val raw: ByteArray) {
     /** The identifier without the team prefix, which is the bundle id. */
     val bundleIdentifier: String = applicationIdentifier.substringAfter('.', "")
 
+    /**
+     * True only when this profile's explicit/wildcard application identifier
+     * covers [bundleId] and its team matches [teamId]. App ID prefixes can be
+     * legacy values distinct from a Team ID, so compare prefix syntax and the
+     * profile's TeamIdentifier separately.
+     */
+    fun authorizes(bundleId: String, teamId: String): Boolean {
+        if (bundleId.isBlank() || teamId.isBlank() || teamId !in (plist["TeamIdentifier"]?.asList.orEmpty().mapNotNull { it.asString })) return false
+        val separator = applicationIdentifier.indexOf('.')
+        if (separator <= 0 || separator == applicationIdentifier.lastIndex) return false
+        val pattern = applicationIdentifier.substring(separator + 1)
+        if ('*' in pattern && pattern != "*" && !(pattern.endsWith(".*") && pattern.dropLast(2).none { it == '*' })) return false
+        return when {
+            pattern == "*" -> true
+            !pattern.contains('*') -> pattern == bundleId
+            else -> {
+                val literal = pattern.dropLast(1) // keep the delimiter dot
+                bundleId.startsWith(literal) && bundleId.length > literal.length
+            }
+        }
+    }
+
     val expirationDate: Date? = (plist["ExpirationDate"] as? Plist.Stamp)?.date
 
     val provisionedDevices: List<String> =

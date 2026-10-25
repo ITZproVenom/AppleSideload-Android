@@ -69,6 +69,18 @@ internal fun liveContainerKeychainGroups(teamId: String): Plist.Arr = Plist.Arr(
         (1..2).map { Plist.Str("$teamId.com.kdt.livecontainer.shared.$it") }
 )
 
+internal fun targetBundleIdentifier(original: String, teamId: String, reuseBundleId: String?): String {
+    if (reuseBundleId == null) return if (original.endsWith(".$teamId")) original else "$original.$teamId"
+    if (reuseBundleId.isBlank() || '*' in reuseBundleId) {
+        throw SigningException(
+            operation = "reusing the App ID",
+            reason = "only an exact, explicit App ID can be reused",
+            alternative = "select a specific identifier from the current team's App ID list"
+        )
+    }
+    return reuseBundleId
+}
+
 class SideloadEngine(
     private val context: Context,
     private val anisette: AnisetteProvider,
@@ -83,7 +95,8 @@ class SideloadEngine(
         device: DeviceSession,
         session: AppleSession,
         team: DeveloperTeam,
-        onStep: (SideloadStep) -> Unit
+        onStep: (SideloadStep) -> Unit,
+        reuseBundleId: String? = null
     ): InstallOutcome {
         val work = File(context.cacheDir, "sideload-${System.currentTimeMillis()}")
         try {
@@ -104,9 +117,29 @@ class SideloadEngine(
             onStep(SideloadStep.Account("registering this iPhone"))
             developer.registerDevice(team.teamId, device.info.udid, device.info.name)
 
-            // Identifiers, as isideload makes them: <original>.<TEAMID>, and
-            // every extension keeps its suffix under the new main identifier.
-            val newBundleId = uniqueBundleId(info.bundleId, team.teamId)
+            // Use a user-selected, already registered explicit App ID when requested.
+            // This deliberately makes the IPA install under that app's bundle identity.
+            val newBundleId = targetBundleIdentifier(info.bundleId, team.teamId, reuseBundleId)
+            if (reuseBundleId != null && special != SpecialApp.NONE) {
+                throw SigningException(
+                    operation = "reusing the App ID",
+                    reason = "existing App ID reuse is supported for ordinary custom apps only; ${special.name} requires its own bundle and signing configuration",
+                    alternative = "install this IPA with the standard generated App ID, or choose an ordinary custom IPA"
+                )
+            }
+            val existingAppIds = if (reuseBundleId == null) {
+                null
+            } else {
+                developer.listAppIds(team.teamId).also { ids ->
+                    if (ids.none { it.identifier == newBundleId }) {
+                        throw SigningException(
+                            operation = "reusing the App ID",
+                            reason = "$newBundleId is not registered to the selected team",
+                            alternative = "reload the App IDs and select one registered to this team"
+                        )
+                    }
+                }
+            }
             val extensions = IpaPackage.extensions(bundle)
             val extensionIds = extensions.map { appex ->
                 val id = IpaPackage.readInfo(appex)["CFBundleIdentifier"]?.asString
@@ -124,11 +157,26 @@ class SideloadEngine(
                 }
                 newBundleId + id.removePrefix(info.bundleId)
             }
+            if (reuseBundleId != null) {
+                val missingExtensionIds = extensionIds.filterNot { extensionId -> existingAppIds.orEmpty().any { it.identifier == extensionId } }
+                if (missingExtensionIds.isNotEmpty()) {
+                    throw SigningException(
+                        operation = "reusing the App ID",
+                        reason = "the IPA's extensions need separate registered App IDs: ${missingExtensionIds.joinToString()}",
+                        limitation = "reusing the main App ID does not authorize embedded extensions",
+                        alternative = "register the extension IDs separately, or use the generated-ID install path"
+                    )
+                }
+            }
             IpaPackage.rewriteIdentifiers(bundle, info.bundleId, newBundleId, null)
 
             onStep(SideloadStep.Account("preparing ${1 + extensionIds.size} app identifier(s)"))
-            val appIds = ensureAppIds(developer, team, listOf(newBundleId to info.name) +
-                extensionIds.zip(extensions.map { it.nameWithoutExtension }))
+            val appIds = ensureAppIds(
+                developer,
+                team,
+                listOf(newBundleId to info.name) + extensionIds.zip(extensions.map { it.nameWithoutExtension }),
+                existingAppIds
+            )
             val mainAppId = appIds.first { it.identifier == newBundleId }
 
             val groupId = "group." + if (special == SpecialApp.SIDESTORE_LIVECONTAINER) {
@@ -136,26 +184,25 @@ class SideloadEngine(
             } else {
                 newBundleId
             }
-            onStep(SideloadStep.Account("preparing the app group"))
-            val group = developer.ensureAppGroup(team.teamId, groupId, info.name)
-            appIds.forEach { appId ->
-                developer.enableAppGroups(team.teamId, appId.appIdId)
-                developer.assignAppGroup(team.teamId, appId.appIdId, group.groupId)
+            if (reuseBundleId == null) {
+                onStep(SideloadStep.Account("preparing the app group"))
+                val group = developer.ensureAppGroup(team.teamId, groupId, info.name)
+                appIds.forEach { appId ->
+                    developer.enableAppGroups(team.teamId, appId.appIdId)
+                    developer.assignAppGroup(team.teamId, appId.appIdId, group.groupId)
+                }
+            } else {
+                // Do not mutate App Group capability assignments on a reused
+                // ID that may already be used by another app. Its existing
+                // profile entitlements are preserved by the signer.
+                onStep(SideloadStep.Account("preserving existing App ID capabilities"))
             }
 
             onStep(SideloadStep.Account("downloading the provisioning profile"))
             val profile = ProvisioningProfile(
                 developer.downloadProvisioningProfile(team.teamId, mainAppId.appIdId)
             )
-            if (!profile.covers(device.info.udid)) {
-                throw SigningException(
-                    operation = "preparing the provisioning profile",
-                    reason = "Apple returned a profile that does not list this iPhone",
-                    limitation = "a profile only covers devices registered to the account " +
-                        "at the time it was issued",
-                    alternative = "try again, which asks Apple for a fresh profile"
-                )
-            }
+            validateSigningProfile(profile, newBundleId, team.teamId, device.info.udid, identity)
 
             applySpecialBehaviour(bundle, extensions, special, groupId, identity, machineId, device.info.udid)
 
@@ -169,9 +216,9 @@ class SideloadEngine(
             val nestedProfiles = appIds
                 .filter { it.identifier != newBundleId }
                 .associate { appId ->
-                    appId.identifier to ProvisioningProfile(
-                        developer.downloadProvisioningProfile(team.teamId, appId.appIdId)
-                    )
+                    val nested = ProvisioningProfile(developer.downloadProvisioningProfile(team.teamId, appId.appIdId))
+                    validateSigningProfile(nested, appId.identifier, team.teamId, device.info.udid, identity)
+                    appId.identifier to nested
                 }
             // Apple's intermediate certificate goes into the signature too; the
             // device does not look it up while installing.
@@ -212,12 +259,47 @@ class SideloadEngine(
         }
     }
 
+    private fun validateSigningProfile(
+        profile: ProvisioningProfile,
+        bundleId: String,
+        teamId: String,
+        udid: String,
+        identity: SigningIdentity
+    ) {
+        if (!profile.authorizes(bundleId, teamId)) {
+            throw SigningException(
+                operation = "checking the provisioning profile for $bundleId",
+                reason = "profile ${profile.uuid.ifBlank { "(unknown UUID)" }} does not authorize application-identifier " +
+                    "${profile.applicationIdentifier.ifBlank { "(missing)" }} for team $teamId",
+                limitation = "iOS rejects a signature when its application identifier or team is not allowed by the embedded profile",
+                alternative = "refresh the App IDs/profile for this bundle ID and selected team"
+            )
+        }
+        if (profile.isExpired) throw SigningException(
+            operation = "checking the provisioning profile for $bundleId",
+            reason = "Apple returned an expired provisioning profile",
+            alternative = "retry to download a fresh profile"
+        )
+        if (!profile.covers(udid)) throw SigningException(
+            operation = "checking the provisioning profile for $bundleId",
+            reason = "the profile does not list this iPhone",
+            limitation = "a profile only covers devices registered to the account when it was issued",
+            alternative = "register this iPhone and download a fresh profile"
+        )
+        if (!profile.matches(identity.certificate)) throw SigningException(
+            operation = "checking the provisioning profile for $bundleId",
+            reason = "the profile does not authorize the signing certificate stored on this phone",
+            alternative = "sign in again or renew the development certificate, then retry"
+        )
+    }
+
     private fun ensureAppIds(
         developer: DeveloperSession,
         team: DeveloperTeam,
-        wanted: List<Pair<String, String>>
+        wanted: List<Pair<String, String>>,
+        known: List<DeveloperAppId>? = null
     ): List<DeveloperAppId> {
-        val existing = developer.listAppIds(team.teamId)
+        val existing = known ?: developer.listAppIds(team.teamId)
         return wanted.map { (identifier, name) ->
             existing.firstOrNull { it.identifier == identifier }
                 ?: developer.addAppId(team.teamId, identifier, name)
@@ -473,8 +555,7 @@ class SideloadEngine(
     }
 
     /** <original>.<TEAMID>, as isideload names them, stable for refreshes. */
-    fun uniqueBundleId(original: String, teamId: String): String =
-        if (original.endsWith(".$teamId")) original else "$original.$teamId"
+    fun uniqueBundleId(original: String, teamId: String): String = targetBundleIdentifier(original, teamId, null)
 
     private companion object {
         const val STAGING = "/PublicStaging"
