@@ -211,7 +211,9 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     onInstallSource = viewModel::installSource,
                     onPickFile = { pickFile.launch(arrayOf("*/*")) },
-                    onInstall = viewModel::install,
+                    onInstall = { reuseId -> if (reuseId == null) viewModel.install() else viewModel.installCustomIpa(reuseId) },
+                    onLoadAppIds = { viewModel.loadAppIds() },
+                    onSelectReuseAppId = viewModel::setReuseAppId,
                     onNavigate = { destination = it }
                 )
 
