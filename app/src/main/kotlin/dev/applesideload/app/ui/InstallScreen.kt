@@ -250,7 +250,7 @@ private fun CustomIpaCard(
     state: UiState,
     ready: Boolean,
     onPickFile: () -> Unit,
-    onInstall: () -> Unit,
+    onInstall: (String?) -> Unit,
     onLoadAppIds: () -> Unit,
     onSelectReuseAppId: (String?) -> Unit
 ) = SectionCard("Your own IPA", icon = Icons.Filled.FolderOpen) {
