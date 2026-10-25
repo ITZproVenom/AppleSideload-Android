@@ -379,7 +379,9 @@ private fun CustomIpaCard(
                     Button(
                         onClick = {
                             confirmReuse = false
-                            if (selectedReuseId?.identifier == confirmedReuseId) confirmedReuseId?.let(onInstall)
+                            if (selectedReuseId?.identifier == confirmedReuseId) {
+                                confirmedReuseId?.let { id -> onInstall(id) }
+                            }
                         },
                         enabled = selectedReuseId?.identifier == confirmedReuseId
                     ) { Text("Continue") }
