@@ -3,6 +3,7 @@ package dev.applesideload.sideload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import dev.applesideload.signing.SigningException
 
 class ReusedAppIdTest {
     @Test
