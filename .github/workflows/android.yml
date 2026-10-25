@@ -37,11 +37,21 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          from xml.etree import ElementTree
           import os
           lines = Path('gradle-output.log').read_text(errors='replace').splitlines() if Path('gradle-output.log').exists() else []
           needles = ('FAILURE:', 'What went wrong:', 'Execution failed', 'Unresolved reference', 'e: ', 'failed with an exception', 'AssertionFailedError', 'There were failing tests')
           picked = [line.strip() for line in lines if any(needle in line for needle in needles)]
-          summary = '\n'.join(picked[-25:]) or 'Gradle failed; no recognized diagnostic lines found. See build-diagnostics artifact.'
+          for report in Path('.').glob('**/build/test-results/**/*.xml'):
+              try:
+                  root = ElementTree.parse(report).getroot()
+                  for case in root.iter('testcase'):
+                      failure = case.find('failure') or case.find('error')
+                      if failure is not None:
+                          picked.append(f"{case.get('classname')}.{case.get('name')}: {failure.get('message', '')} {(failure.text or '').strip()}")
+              except Exception as error:
+                  picked.append(f"Could not parse {report}: {error}")
+          summary = '\n'.join(picked[-25:]) or 'Gradle failed; see build-diagnostics artifact.'
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
               output.write('## Gradle failure details\n\n```text\n' + summary + '\n```\n')
           for line in picked[-10:]:
