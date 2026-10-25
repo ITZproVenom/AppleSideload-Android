@@ -91,7 +91,9 @@ data class UiState(
     /** iPhones paired with this phone through Remote Pairing (Wi-Fi on iOS 17 and later). */
     val remoteDevices: List<RemoteDeviceSummary> = emptyList(),
     /** The team's App IDs once read from Apple; null until then. */
-    val appIds: List<dev.applesideload.apple.DeveloperAppId>? = null
+    val appIds: List<dev.applesideload.apple.DeveloperAppId>? = null,
+    /** Optional existing App ID selected for the current custom IPA. */
+    val reuseAppIdIdentifier: String? = null
 )
 
 /** Where a wireless pairing stands, for the screens and the web page. */
@@ -972,7 +974,7 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
-    fun selectTeam(team: DeveloperTeam) = set { it.copy(selectedTeam = team) }
+    fun selectTeam(team: DeveloperTeam) = set { it.copy(selectedTeam = team, appIds = null, reuseAppIdIdentifier = null) }
 
     override fun selectTeamById(teamId: String): Action {
         val team = _state.value.teams.firstOrNull { it.teamId == teamId }
@@ -984,7 +986,7 @@ class AppController(private val app: SideloadApplication) : Controls {
 
     override fun signOut() {
         _state.value.account?.let { app.identityStore.forgetPassword(it.appleId) }
-        set { it.copy(account = null, teams = emptyList(), selectedTeam = null, twoFactor = null) }
+        set { it.copy(account = null, teams = emptyList(), selectedTeam = null, twoFactor = null, appIds = null, reuseAppIdIdentifier = null) }
     }
 
     override fun revokeCertificate(): Action {
@@ -1000,14 +1002,22 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
-    /** Reads the App IDs registered on the selected team. */
+    /** Choose an exact App ID from the currently loaded team list for the custom IPA. */
+    fun setReuseAppId(identifier: String?) {
+        if (identifier != null && _state.value.appIds?.any { it.identifier == identifier } != true) {
+            refuse("Load App IDs for the selected team, then choose one from that list.")
+            return
+        }
+        set { it.copy(reuseAppIdIdentifier = identifier) }
+    }
+
     fun loadAppIds(): Action {
         val account = _state.value.account ?: return refuse("Sign in first.")
         val team = _state.value.selectedTeam ?: return refuse("Select a team first.")
         return run("Reading the App IDs") {
             val developer = DeveloperSession(account, app.anisetteProvider(), AppleAuth(app.anisetteProvider()))
             val ids = developer.listAppIds(team.teamId)
-            set { it.copy(appIds = ids) }
+            set { it.copy(appIds = ids, reuseAppIdIdentifier = it.reuseAppIdIdentifier?.takeIf { id -> ids.any { item -> item.identifier == id } }) }
         }
     }
 
@@ -1022,6 +1032,7 @@ class AppController(private val app: SideloadApplication) : Controls {
             set {
                 it.copy(
                     appIds = ids,
+                    reuseAppIdIdentifier = it.reuseAppIdIdentifier?.takeIf { id -> ids.any { item -> item.identifier == id } },
                     notice = "The App ID was deleted. The app that used it will not launch until it is installed again."
                 )
             }
@@ -1062,7 +1073,7 @@ class AppController(private val app: SideloadApplication) : Controls {
     private fun inspect(file: File) {
         val info = IpaPackage.inspect(file)
         val previous = _state.value.selectedIpa?.file
-        set { it.copy(selectedIpa = SelectedIpa(file, info)) }
+        set { it.copy(selectedIpa = SelectedIpa(file, info), reuseAppIdIdentifier = null) }
         if (previous != null && previous != file) previous.delete()
     }
 
@@ -1101,13 +1112,27 @@ class AppController(private val app: SideloadApplication) : Controls {
         }
     }
 
-    override fun install(): Action {
-        val selected = _state.value.selectedIpa ?: return refuse("Choose or upload an IPA first.")
+    override fun install(): Action = installCustomIpa(_state.value.reuseAppIdIdentifier)
+
+    fun installCustomIpa(reuseBundleId: String?): Action {
+        val snapshot = _state.value
+        val selected = snapshot.selectedIpa ?: return refuse("Choose or upload an IPA first.")
+        if (reuseBundleId != null && snapshot.appIds?.none { it.identifier == reuseBundleId } != false) {
+            return refuse("That App ID is not in the current team list. Reload the list and choose again.")
+        }
         return run("Installing ${selected.info.name}") {
             val (device, account, team) = requireReady("installing")
             set { it.copy(lastOutcome = null) }
             finishInstall(
-                engine().install(selected.file, InstallSource.CUSTOM, device, account, team, ::onStep),
+                engine().install(
+                    selected.file,
+                    InstallSource.CUSTOM,
+                    device,
+                    account,
+                    team,
+                    ::onStep,
+                    reuseBundleId = reuseBundleId
+                ),
                 selected.info.name
             )
         }

@@ -19,7 +19,10 @@ import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -28,6 +31,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -48,7 +56,9 @@ fun InstallScreen(
     state: UiState,
     onInstallSource: (InstallSource) -> Unit,
     onPickFile: () -> Unit,
-    onInstall: () -> Unit,
+    onInstall: (String?) -> Unit,
+    onLoadAppIds: () -> Unit,
+    onSelectReuseAppId: (String?) -> Unit,
     onNavigate: (Destination) -> Unit
 ) = ScreenColumn {
     val connected = state.connection == ConnectionState.READY
@@ -63,7 +73,7 @@ fun InstallScreen(
     }
     if (!connected || !signedIn) ChecklistCard(state, connected, signedIn, onNavigate)
     SideStoreCard(ready, state.device?.takeIf { connected }?.majorVersion, onInstallSource)
-    CustomIpaCard(state, ready, onPickFile, onInstall)
+    CustomIpaCard(state, ready, onPickFile, onInstall, onLoadAppIds, onSelectReuseAppId)
     Hint(
         "A free Apple ID signs each app for 7 days, keeps up to 3 sideloaded apps on the iPhone " +
             "at a time, and can make 10 new app identifiers a week. Those limits are Apple's.",
@@ -236,8 +246,14 @@ private fun SideStoreCard(ready: Boolean, ios: Int?, onInstallSource: (InstallSo
     }
 
 @Composable
-private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit, onInstall: () -> Unit) =
-    SectionCard("Your own IPA", icon = Icons.Filled.FolderOpen) {
+private fun CustomIpaCard(
+    state: UiState,
+    ready: Boolean,
+    onPickFile: () -> Unit,
+    onInstall: (String?) -> Unit,
+    onLoadAppIds: () -> Unit,
+    onSelectReuseAppId: (String?) -> Unit
+) = SectionCard("Your own IPA", icon = Icons.Filled.FolderOpen) {
         val idle = state.busy == null
         val selected = state.selectedIpa
         if (selected == null) {
@@ -252,6 +268,18 @@ private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit
                 Text("Choose IPA")
             }
             return@SectionCard
+        }
+    var appIdMenuExpanded by remember { mutableStateOf(false) }
+    var confirmReuse by remember { mutableStateOf(false) }
+    var confirmedReuseId by remember { mutableStateOf<String?>(null) }
+    val reuseId = state.reuseAppIdIdentifier
+        val reusableIds = state.appIds.orEmpty().filter { '*' !in it.identifier }
+        val selectedReuseId = reusableIds.firstOrNull { it.identifier == reuseId }
+        LaunchedEffect(reuseId, selected.file.path) {
+            if (confirmedReuseId != null && confirmedReuseId != reuseId) {
+                confirmedReuseId = null
+                confirmReuse = false
+            }
         }
         val info = selected.info
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -276,6 +304,37 @@ private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit
                 InfoRow("Contains", contents(info))
             }
         }
+        if (state.appIds == null) {
+            Hint("Want to reuse an App ID instead of creating one? Load the IDs for this team on the Account tab.")
+            OutlinedButton(onClick = onLoadAppIds, enabled = idle && state.account != null) {
+                Text("Load existing App IDs")
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("App ID", style = MaterialTheme.typography.titleSmall)
+                OutlinedButton(onClick = { appIdMenuExpanded = true }, enabled = idle) {
+                    Text(selectedReuseId?.let { "Reuse ${it.identifier}" } ?: "Create/use generated ID")
+                }
+                DropdownMenu(expanded = appIdMenuExpanded, onDismissRequest = { appIdMenuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Create/use generated ID (default)") },
+                        onClick = { onSelectReuseAppId(null); appIdMenuExpanded = false }
+                    )
+                    reusableIds.forEach { appId ->
+                        DropdownMenuItem(
+                            text = { Text("${appId.name} · ${appId.identifier}") },
+                            onClick = { onSelectReuseAppId(appId.identifier); appIdMenuExpanded = false }
+                        )
+                    }
+                    if (reusableIds.isEmpty()) {
+                        DropdownMenuItem(text = { Text("No reusable explicit App IDs") }, onClick = { appIdMenuExpanded = false }, enabled = false)
+                    }
+                }
+                selectedReuseId?.let {
+                    Hint("The IPA bundle ID will be rewritten to this identifier. If an app with this ID is installed, it may be replaced and its data may be affected.")
+                }
+            }
+        }
         val warning = AppColors.status.warning
         if (!info.supportsIphone) {
             IconLine(
@@ -296,7 +355,41 @@ private fun CustomIpaCard(state: UiState, ready: Boolean, onPickFile: () -> Unit
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onPickFile, enabled = idle) { Text("Choose another") }
-            Button(onClick = onInstall, enabled = ready) { Text("Sign & install") }
+            Button(
+                onClick = {
+                    if (selectedReuseId != null) {
+                        confirmedReuseId = selectedReuseId.identifier
+                        confirmReuse = true
+                    } else onInstall(null)
+                },
+                enabled = ready
+            ) { Text(if (selectedReuseId == null) "Sign & install" else "Sign & install with existing ID") }
+        }
+        if (confirmReuse) {
+            AlertDialog(
+                onDismissRequest = { confirmReuse = false },
+                title = { Text("Reuse this App ID?") },
+                text = {
+                    if (selectedReuseId == null) {
+                        Text("The selected App ID is no longer in the loaded team list. Reload the IDs or choose a different one.", color = MaterialTheme.colorScheme.error)
+                    }
+                    Text("This IPA will be signed as ${confirmedReuseId ?: "the selected identifier"}. Installing it may replace another app with the same bundle ID and could affect that app’s data. Embedded extensions need their own already-registered child App IDs; reuse will stop rather than create or mutate additional IDs.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmReuse = false
+                            if (selectedReuseId?.identifier == confirmedReuseId) {
+                                confirmedReuseId?.let { id -> onInstall(id) }
+                            }
+                        },
+                        enabled = selectedReuseId?.identifier == confirmedReuseId
+                    ) { Text("Continue") }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { confirmReuse = false }) { Text("Cancel") }
+                }
+            )
         }
     }
 

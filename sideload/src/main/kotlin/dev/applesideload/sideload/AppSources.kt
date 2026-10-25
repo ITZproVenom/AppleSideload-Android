@@ -63,7 +63,9 @@ data class ReleaseBuild(
 class ReleaseDownloader(
     private val directory: File,
     private val connectionFactory: ((String) -> HttpURLConnection)? = null,
-    private val retryDelay: (Long) -> Unit = { Thread.sleep(it) }
+    private val retryDelay: (Long) -> Unit = { Thread.sleep(it) },
+    private val logInfo: (String) -> Unit = { Log.i(LogTag.APP, it) },
+    private val logWarning: (String) -> Unit = { Log.w(LogTag.APP, it) }
 ) {
 
     init {
@@ -83,11 +85,11 @@ class ReleaseDownloader(
         val stamp = build.updatedAt.filter { it.isDigit() }
         val target = File(directory, "${build.source.name}-$safeTag${if (stamp.isEmpty()) "" else "-$stamp"}.ipa")
         if (target.exists() && (build.size <= 0 || target.length() == build.size)) {
-            Log.i(LogTag.APP, "reusing the downloaded ${build.source.title} ${build.label}")
+            logInfo("reusing the downloaded ${build.source.title} ${build.label}")
             return target
         }
         val partial = File(directory, target.name + ".part")
-        Log.i(LogTag.APP, "downloading ${build.source.title} ${build.label}")
+        logInfo("downloading ${build.source.title} ${build.label}")
         var attempt = 0
         while (true) {
             attempt++
@@ -101,7 +103,7 @@ class ReleaseDownloader(
                 val retryable = error !is SocketTimeoutException && error !is InterruptedIOException &&
                     (httpError == null || httpError.status == 408 || httpError.status == 429 || httpError.status >= 500)
                 if (!retryable || attempt >= MAX_DOWNLOAD_ATTEMPTS) throw error
-                Log.w(LogTag.APP, "download interrupted (attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS): ${error.message}; retrying")
+                logWarning("download interrupted (attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS): ${error.message}; retrying")
                 onProgress(0)
                 try {
                     retryDelay(RETRY_DELAY_MS * attempt)

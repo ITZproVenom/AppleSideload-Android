@@ -53,7 +53,7 @@ class ScreenshotTest {
         IphoneScreen(state, "192.168.1.23", {}, {}, {}, {}, {}, {}, {}, {})
 
     @Composable
-    private fun Install(state: UiState) = InstallScreen(state, {}, {}, {}, {})
+    private fun Install(state: UiState) = InstallScreen(state, {}, {}, {}, {}, {}, {})
 
     @Composable
     private fun Apps(state: UiState) = AppsScreen(state, {}, {}, {})

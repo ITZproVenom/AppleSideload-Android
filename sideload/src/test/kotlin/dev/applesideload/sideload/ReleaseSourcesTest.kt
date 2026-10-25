@@ -60,7 +60,9 @@ class ReleaseSourcesTest {
                 requests.incrementAndGet()
                 FakeDownloadConnection(URL(url), byteArrayOf(), status = 404)
             },
-            retryDelay = {}
+            retryDelay = {},
+            logInfo = {},
+            logWarning = {}
         )
         val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/missing.ipa", 10)
         try {
@@ -84,7 +86,9 @@ class ReleaseSourcesTest {
                 if (requests.incrementAndGet() == 1) FakeDownloadConnection(URL(url), expected, failAfter = 5)
                 else FakeDownloadConnection(URL(url), expected)
             },
-            retryDelay = {}
+            retryDelay = {},
+            logInfo = {},
+            logWarning = {}
         )
         val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/app.ipa", expected.size.toLong())
 
@@ -106,7 +110,9 @@ class ReleaseSourcesTest {
                 requests.incrementAndGet()
                 FakeDownloadConnection(URL(url), expected, failAfter = 5)
             },
-            retryDelay = {}
+            retryDelay = {},
+            logInfo = {},
+            logWarning = {}
         )
         val build = ReleaseBuild(InstallSource.SIDESTORE, "nightly", "https://example.test/app.ipa", expected.size.toLong())
         try {
